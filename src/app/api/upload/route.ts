@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { randomBytes } from 'crypto';
-import { mkdir, writeFile } from 'fs/promises';
-import path from 'path';
+import { put } from '@vercel/blob';
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,18 +22,11 @@ export async function POST(request: NextRequest) {
     // Generate unique share code
     const shareCode = randomBytes(6).toString('base64url');
 
-    // Generate unique file name to avoid conflicts
-    const ext = path.extname(file.name);
-    const uniqueName = `${Date.now()}-${randomBytes(4).toString('hex')}${ext}`;
-    const uploadDir = path.join(process.cwd(), 'uploads');
-    const filePath = path.join(uploadDir, uniqueName);
-
-    // Ensure uploads directory exists
-    await mkdir(uploadDir, { recursive: true });
-
-    // Write file to disk
-    const buffer = Buffer.from(await file.arrayBuffer());
-    await writeFile(filePath, buffer);
+    // Upload to Vercel Blob
+    // Use a unique pathname to avoid conflicts: share/{shareCode}/{fileName}
+    const blob = await put(`share/${shareCode}/${file.name}`, file, {
+      access: 'public',
+    });
 
     // Calculate expiry date
     const expiresAt = new Date();
@@ -45,7 +37,7 @@ export async function POST(request: NextRequest) {
       data: {
         fileName: file.name,
         fileSize: file.size,
-        filePath: uniqueName,
+        blobUrl: blob.url,
         mimeType: file.type || 'application/octet-stream',
         shareCode,
         expiresAt,

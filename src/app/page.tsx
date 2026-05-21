@@ -116,7 +116,6 @@ function getFileIcon(fileName: string): string {
 function SharePage({ code }: { code: string }) {
   const [fileInfo, setFileInfo] = useState<SharedFileInfo | null>(null);
   const [loading, setLoading] = useState(true);
-  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState('');
   const { toast } = useToast();
 
@@ -139,34 +138,11 @@ function SharePage({ code }: { code: string }) {
     fetchFileInfo();
   }, [code]);
 
-  const handleDownload = async () => {
+  const handleDownload = () => {
     if (!fileInfo) return;
-    setDownloading(true);
-    try {
-      const res = await fetch(`/api/download?code=${code}`);
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || '下载失败');
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileInfo.fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toast({ title: '下载开始', description: `${fileInfo.fileName} 正在下载` });
-    } catch (err) {
-      toast({
-        title: '下载失败',
-        description: err instanceof Error ? err.message : '未知错误',
-        variant: 'destructive',
-      });
-    } finally {
-      setDownloading(false);
-    }
+    // API returns a redirect to Vercel Blob URL, open in new tab for download
+    window.open(`/api/download?code=${code}`, '_blank');
+    toast({ title: '下载开始', description: `${fileInfo.fileName} 正在下载` });
   };
 
   const handleCopyLink = async () => {
@@ -260,20 +236,11 @@ function SharePage({ code }: { code: string }) {
             <div className="flex gap-2">
               <Button
                 onClick={handleDownload}
-                disabled={downloading || fileInfo.isExpired}
+                disabled={fileInfo.isExpired}
                 className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white"
               >
-                {downloading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    下载中...
-                  </>
-                ) : (
-                  <>
-                    <Download className="h-4 w-4 mr-2" />
-                    下载文件
-                  </>
-                )}
+                <Download className="h-4 w-4 mr-2" />
+                下载文件
               </Button>
               <Button variant="outline" onClick={handleCopyLink}>
                 <Copy className="h-4 w-4 mr-2" />

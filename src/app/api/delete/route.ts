@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { unlink } from 'fs/promises';
-import path from 'path';
+import { del } from '@vercel/blob';
 
 export async function DELETE(request: NextRequest) {
   try {
@@ -17,12 +16,11 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: '文件不存在' }, { status: 404 });
     }
 
-    // Delete file from disk
+    // Delete file from Vercel Blob
     try {
-      const filePath = path.join(process.cwd(), 'uploads', sharedFile.filePath);
-      await unlink(filePath);
+      await del(sharedFile.blobUrl);
     } catch {
-      // File may already be deleted, ignore error
+      // Blob may already be deleted, ignore error
     }
 
     // Delete from database

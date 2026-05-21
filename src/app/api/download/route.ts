@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { readFile, stat } from 'fs/promises';
-import path from 'path';
 
 export async function GET(request: NextRequest) {
   try {
@@ -30,20 +28,13 @@ export async function GET(request: NextRequest) {
       data: { downloadCount: { increment: 1 } },
     });
 
-    // Read file
-    const filePath = path.join(process.cwd(), 'uploads', sharedFile.filePath);
-    const fileBuffer = await readFile(filePath);
+    // Redirect to Vercel Blob URL for direct download
+    // Add download=1 parameter to force browser download instead of inline display
+    const downloadUrl = sharedFile.blobUrl.includes('?')
+      ? `${sharedFile.blobUrl}&download=1`
+      : `${sharedFile.blobUrl}?download=1`;
 
-    // Encode filename for Content-Disposition (support Chinese filenames)
-    const encodedFileName = encodeURIComponent(sharedFile.fileName);
-
-    return new NextResponse(fileBuffer, {
-      headers: {
-        'Content-Type': sharedFile.mimeType || 'application/octet-stream',
-        'Content-Disposition': `attachment; filename*=UTF-8''${encodedFileName}`,
-        'Content-Length': sharedFile.fileSize.toString(),
-      },
-    });
+    return NextResponse.redirect(downloadUrl);
   } catch (error) {
     console.error('Download error:', error);
     return NextResponse.json({ error: '下载失败' }, { status: 500 });

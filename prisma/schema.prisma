@@ -6,7 +6,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -14,7 +14,7 @@ model SharedFile {
   id            String   @id @default(cuid())
   fileName      String
   fileSize      Int
-  filePath      String
+  blobUrl       String   // Vercel Blob 存储的公开 URL
   mimeType      String
   shareCode     String   @unique
   downloadCount Int      @default(0)
