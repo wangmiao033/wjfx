@@ -355,7 +355,7 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
     setPasswordVerified(true);
   }, [password, toast]);
 
-  // 高速下载：优先使用签名URL直连Vercel Blob，避免服务器中转
+  // 高速下载：获取签名URL后直接让浏览器原生下载
   const handleDownload = useCallback(async () => {
     if (!fileInfo) return;
 
@@ -371,131 +371,59 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
     try {
       const passwordParam = fileInfo.hasPassword && password ? `&password=${encodeURIComponent(password)}` : '';
 
-      // 先尝试获取签名URL直连下载
+      // 获取签名下载URL
+      let downloadUrl = '';
+      let isLocal = false;
+
       try {
         const urlRes = await fetch(`/api/download-url?code=${code}${passwordParam}`);
         const urlData = await urlRes.json();
 
         if (urlRes.ok && urlData.downloadUrl) {
-          // 使用签名URL直接下载（直连Vercel Blob，不经过服务器代理）
-          const directUrl = urlData.downloadUrl;
+          downloadUrl = urlData.downloadUrl;
+          isLocal = urlData.isLocal || false;
+        }
+      } catch {
+        // 签名URL获取失败，回退到代理
+      }
 
-          // 使用 fetch + stream 跟踪进度
-          const response = await fetch(directUrl);
-          if (!response.ok) throw new Error('直接下载失败');
+      if (!downloadUrl) {
+        // 回退到代理URL
+        downloadUrl = `/api/download?code=${code}${passwordParam}`;
+        isLocal = true;
+      }
 
-          const contentLength = response.headers.get('Content-Length');
-          const totalBytes = contentLength ? parseInt(contentLength, 10) : fileInfo.fileSize;
-
-          if (!response.body) {
-            const blob = await response.blob();
-            const blobUrl = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = blobUrl;
-            a.download = fileInfo.fileName;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(blobUrl);
-            setDownloadProgress(100);
-            toast({ title: '下载完成', description: `${fileInfo.fileName} 已下载` });
-            return;
-          }
-
-          // 流式读取 + 进度跟踪
-          const reader = response.body.getReader();
-          const chunks: Uint8Array[] = [];
-          let receivedBytes = 0;
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            receivedBytes += value.length;
-            if (totalBytes > 0) {
-              const progress = Math.round((receivedBytes / totalBytes) * 100);
-              setDownloadProgress(progress);
-            }
-          }
-
-          const blob = new Blob(chunks);
-          const blobUrl = URL.createObjectURL(blob);
+      if (isLocal) {
+        // 本地/代理模式：需要用 fetch + stream（因为代理URL才有正确的 Content-Disposition）
+        // 但也先尝试直接跳转（更简单更快）
+        try {
           const a = document.createElement('a');
-          a.href = blobUrl;
+          a.href = downloadUrl;
           a.download = fileInfo.fileName;
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
-          URL.revokeObjectURL(blobUrl);
-
           setDownloadProgress(100);
-          toast({ title: '下载完成', description: `${fileInfo.fileName} 已下载` });
+          toast({ title: '下载已开始', description: fileInfo.fileName });
           return;
-        }
-      } catch (directError) {
-        // 签名URL下载失败，回退到服务器代理模式
-        console.log('Direct download failed, falling back to proxy:', directError);
-      }
-
-      // 回退：服务器代理下载（兼容本地存储模式）
-      const response = await fetch(`/api/download?code=${code}${passwordParam}`);
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({ error: '下载失败' }));
-        if (response.status === 403) {
-          toast({ title: '密码错误', description: '请检查提取密码', variant: 'destructive' });
-          setPasswordVerified(false);
-          return;
-        }
-        throw new Error(data.error || '下载失败');
-      }
-
-      const contentLength = response.headers.get('Content-Length');
-      const totalBytes = contentLength ? parseInt(contentLength, 10) : fileInfo.fileSize;
-
-      if (!response.body) {
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileInfo.fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        setDownloadProgress(100);
-        toast({ title: '下载完成', description: `${fileInfo.fileName} 已下载` });
-        return;
-      }
-
-      // Stream reading with progress
-      const reader = response.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let receivedBytes = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        receivedBytes += value.length;
-        if (totalBytes > 0) {
-          const progress = Math.round((receivedBytes / totalBytes) * 100);
-          setDownloadProgress(progress);
+        } catch {
+          // 如果直接下载失败，用 fetch 方式
         }
       }
 
-      const blob = new Blob(chunks);
-      const url = URL.createObjectURL(blob);
+      // 签名URL直连模式：浏览器直接跳转到 Vercel Blob 的签名 URL
+      // 这是最快的方式——浏览器原生下载管理器接管，支持断点续传、多线程下载
       const a = document.createElement('a');
-      a.href = url;
-      a.download = fileInfo.fileName;
+      a.href = downloadUrl;
+      // 签名URL的响应头已有 Content-Disposition: attachment，浏览器会自动下载
+      a.target = '_blank'; // 新标签页打开，避免当前页面跳转
+      a.rel = 'noopener';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
 
       setDownloadProgress(100);
-      toast({ title: '下载完成', description: `${fileInfo.fileName} 已下载` });
+      toast({ title: '下载已开始', description: `${fileInfo.fileName} - 由浏览器下载管理器接管` });
     } catch (err) {
       toast({
         title: '下载失败',
@@ -761,12 +689,12 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
                 {downloading ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    下载中...
+                    准备下载...
                   </>
                 ) : (
                   <>
                     <Download className="h-4 w-4 mr-2" />
-                    下载文件
+                    下载文件 ({formatFileSize(fileInfo.fileSize)})
                   </>
                 )}
               </Button>
