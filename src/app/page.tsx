@@ -50,6 +50,12 @@ interface UploadingFile {
   status: 'uploading' | 'done' | 'error';
   error?: string;
   shareCode?: string;
+  speed?: string;       // 上传速度
+  eta?: string;         // 预计剩余时间
+  fileSize?: number;    // 文件大小
+  startTime?: number;   // 开始时间
+  lastLoaded?: number;  // 上次已上传字节数
+  lastTime?: number;    // 上次时间戳
 }
 
 function formatFileSize(bytes: number): string {
@@ -131,21 +137,50 @@ function UploadPage() {
     else if (status !== 'loading') setInitialLoading(false);
   }, [status, fetchFiles]);
 
+  // 计算上传速度和剩余时间
+  const calcSpeed = useCallback((uf: UploadingFile, loaded: number, total: number): Partial<UploadingFile> => {
+    const now = Date.now();
+    if (!uf.startTime) return { startTime: now, lastLoaded: loaded, lastTime: now };
+
+    const elapsed = now - (uf.lastTime || now);
+    if (elapsed < 500) return {}; // 每500ms更新一次速度
+
+    const bytesDelta = loaded - (uf.lastLoaded || 0);
+    const speedBps = (bytesDelta / elapsed) * 1000; // bytes per second
+
+    let speed = '';
+    if (speedBps > 1024 * 1024) speed = `${(speedBps / 1024 / 1024).toFixed(1)} MB/s`;
+    else if (speedBps > 1024) speed = `${(speedBps / 1024).toFixed(0)} KB/s`;
+    else speed = `${speedBps.toFixed(0)} B/s`;
+
+    const remaining = total - loaded;
+    const etaSeconds = speedBps > 0 ? Math.ceil(remaining / speedBps) : 0;
+    let eta = '';
+    if (etaSeconds > 60) eta = `约${Math.ceil(etaSeconds / 60)}分钟`;
+    else if (etaSeconds > 0) eta = `约${etaSeconds}秒`;
+
+    return { speed, eta, lastLoaded: loaded, lastTime: now };
+  }, []);
+
   // Vercel Blob 客户端直传（大幅提速：跳过服务器中转）
   const uploadFileWithProgress = useCallback(async (
     file: File,
-    onProgress: (progress: number) => void,
+    onProgress: (progress: number, update: Partial<UploadingFile>) => void,
   ): Promise<{ shareCode: string; fileName: string }> => {
-    // 先检测是否支持客户端直传
+    const startTime = Date.now();
+
+    // 尝试客户端直传
     try {
       const { upload } = await import('@vercel/blob/client');
-      const shareCode = Math.random().toString(36).substring(2, 10);
+      const shareCode = generateRandomPassword().substring(0, 8).toLowerCase();
       const blobPath = `share/${shareCode}/${file.name}`;
 
       const clientPayload = JSON.stringify({
         expireDays,
         password: enablePassword && password.trim() ? password.trim() : null,
       });
+
+      console.log(`[Upload] Starting direct upload: ${file.name} (${formatFileSize(file.size)}), multipart=${file.size > 10 * 1024 * 1024}`);
 
       const blobResult = await upload(blobPath, file, {
         access: 'private',
@@ -154,10 +189,15 @@ function UploadPage() {
         multipart: file.size > 10 * 1024 * 1024, // 大于10MB使用分片上传
         onUploadProgress: (progressEvent) => {
           if (progressEvent.percentage !== undefined) {
-            onProgress(Math.round(progressEvent.percentage));
+            const progress = Math.round(progressEvent.percentage);
+            onProgress(progress, {
+              speed: progressEvent.percentage > 0 ? undefined : undefined,
+            });
           }
         },
       });
+
+      console.log(`[Upload] Direct upload complete: ${blobResult.url}`);
 
       // 直传成功，创建数据库记录
       const completeRes = await fetch('/api/upload/complete', {
@@ -181,46 +221,52 @@ function UploadPage() {
 
       return { shareCode: data.file.shareCode, fileName: data.file.fileName };
     } catch (directUploadError: any) {
-      // 如果直传失败（如本地开发环境），回退到服务端上传
-      console.log('Direct upload failed, falling back to server upload:', directUploadError?.message);
+      const errorMsg = directUploadError?.message || '未知错误';
+      console.error('[Upload] Direct upload failed:', errorMsg);
 
-      // 回退到 XHR 服务端上传
-      return new Promise((resolve, reject) => {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('expireDays', expireDays);
-        if (enablePassword && password.trim()) formData.append('password', password.trim());
+      // 小文件（<4MB）可以回退到服务端上传
+      if (file.size <= 4 * 1024 * 1024) {
+        console.log('[Upload] Falling back to server upload (small file)');
+        return new Promise((resolve, reject) => {
+          const formData = new FormData();
+          formData.append('file', file);
+          formData.append('expireDays', expireDays);
+          if (enablePassword && password.trim()) formData.append('password', password.trim());
 
-        const xhr = new XMLHttpRequest();
+          const xhr = new XMLHttpRequest();
 
-        xhr.upload.addEventListener('progress', (e) => {
-          if (e.lengthComputable) {
-            const progress = Math.round((e.loaded / e.total) * 100);
-            onProgress(progress);
-          }
-        });
-
-        xhr.addEventListener('load', () => {
-          try {
-            const data = JSON.parse(xhr.responseText);
-            if (xhr.status >= 200 && xhr.status < 300) {
-              resolve({ shareCode: data.file.shareCode, fileName: data.file.fileName });
-            } else {
-              reject(new Error(data.error || '上传失败'));
+          xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+              const progress = Math.round((e.loaded / e.total) * 100);
+              onProgress(progress, {});
             }
-          } catch {
-            reject(new Error('上传响应解析失败'));
-          }
+          });
+
+          xhr.addEventListener('load', () => {
+            try {
+              const data = JSON.parse(xhr.responseText);
+              if (xhr.status >= 200 && xhr.status < 300) {
+                resolve({ shareCode: data.file.shareCode, fileName: data.file.fileName });
+              } else {
+                reject(new Error(data.error || '上传失败'));
+              }
+            } catch {
+              reject(new Error('上传响应解析失败'));
+            }
+          });
+
+          xhr.addEventListener('error', () => reject(new Error('网络错误')));
+          xhr.addEventListener('abort', () => reject(new Error('上传已取消')));
+
+          xhr.open('POST', '/api/upload');
+          xhr.send(formData);
         });
+      }
 
-        xhr.addEventListener('error', () => reject(new Error('网络错误')));
-        xhr.addEventListener('abort', () => reject(new Error('上传已取消')));
-
-        xhr.open('POST', '/api/upload');
-        xhr.send(formData);
-      });
+      // 大文件直传失败 - 提供清晰错误信息
+      throw new Error(`直传失败: ${errorMsg}。请刷新页面后重试，或检查网络连接。`);
     }
-  }, [expireDays, enablePassword, password]);
+  }, [expireDays, enablePassword, password, calcSpeed]);
 
   const handleUpload = async (fileList: FileList | File[]) => {
     const filesToUpload = Array.from(fileList);
@@ -234,11 +280,12 @@ function UploadPage() {
       name: f.name,
       progress: 0,
       status: 'uploading' as const,
+      fileSize: f.size,
+      startTime: Date.now(),
     }));
     setUploadingFiles(initialUploads);
 
     let successCount = 0;
-    let lastShareCode = '';
 
     for (let i = 0; i < filesToUpload.length; i++) {
       const file = filesToUpload[i];
@@ -252,20 +299,21 @@ function UploadPage() {
       }
 
       try {
-        const result = await uploadFileWithProgress(file, (progress) => {
-          setUploadingFiles(prev => prev.map((u, idx) =>
-            idx === i ? { ...u, progress } : u
-          ));
+        const result = await uploadFileWithProgress(file, (progress, update) => {
+          setUploadingFiles(prev => prev.map((u, idx) => {
+            if (idx !== i) return u;
+            const speedUpdate = calcSpeed(u, progress / 100 * (u.fileSize || file.size), u.fileSize || file.size);
+            return { ...u, progress, ...update, ...speedUpdate };
+          }));
         });
 
         setUploadingFiles(prev => prev.map((u, idx) =>
-          idx === i ? { ...u, status: 'done', shareCode: result.shareCode } : u
+          idx === i ? { ...u, status: 'done', shareCode: result.shareCode, speed: undefined, eta: undefined } : u
         ));
-        lastShareCode = result.shareCode;
         successCount++;
       } catch (err) {
         setUploadingFiles(prev => prev.map((u, idx) =>
-          idx === i ? { ...u, status: 'error', error: err instanceof Error ? err.message : '上传失败' } : u
+          idx === i ? { ...u, status: 'error', error: err instanceof Error ? err.message : '上传失败', speed: undefined, eta: undefined } : u
         ));
       }
     }
@@ -275,13 +323,10 @@ function UploadPage() {
       await fetchFiles();
     }
 
-    // 3秒后清除上传状态
+    // 5秒后清除完成的上传状态
     setTimeout(() => {
       setUploadingFiles(prev => prev.filter(u => u.status === 'uploading'));
-      if (successCount > 0 && filesToUpload.length === successCount) {
-        setUploadingFiles([]);
-      }
-    }, 3000);
+    }, 5000);
   };
 
   const handleDrag = useCallback((e: React.DragEvent) => {
@@ -509,13 +554,21 @@ function UploadPage() {
                     {uf.status === 'error' && <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0" />}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
-                        <p className="text-xs font-medium truncate">{uf.name}</p>
+                        <p className="text-xs font-medium truncate">{uf.name} {uf.fileSize ? `(${formatFileSize(uf.fileSize)})` : ''}</p>
                         <span className="text-xs text-muted-foreground ml-2 flex-shrink-0">
-                          {uf.status === 'uploading' ? `${uf.progress}%` : uf.status === 'done' ? '完成' : '失败'}
+                          {uf.status === 'uploading' ? `${uf.progress}%` : uf.status === 'done' ? '✓ 完成' : '✗ 失败'}
                         </span>
                       </div>
                       {uf.status === 'uploading' && (
-                        <Progress value={uf.progress} className="h-1.5 mt-1" />
+                        <>
+                          <Progress value={uf.progress} className="h-1.5 mt-1" />
+                          {(uf.speed || uf.eta) && (
+                            <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground">
+                              {uf.speed && <span>{uf.speed}</span>}
+                              {uf.eta && <span>剩余 {uf.eta}</span>}
+                            </div>
+                          )}
+                        </>
                       )}
                       {uf.status === 'error' && uf.error && (
                         <p className="text-xs text-destructive mt-0.5">{uf.error}</p>

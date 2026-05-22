@@ -7,8 +7,9 @@ import { uploadFile, isVercelBlob, generateShareCode } from '@/lib/storage';
 /**
  * 服务端上传路由
  *
- * - Vercel Blob 模式：不使用此路由，改为客户端直传（/api/upload/init + /api/upload/complete）
- * - 本地存储模式：继续使用此路由上传
+ * ⚠️ Vercel Serverless 请求体限制 4.5MB
+ * 大文件请使用客户端直传（/api/upload/init + @vercel/blob/client）
+ * 此路由作为小文件或本地开发的上传通道
  */
 export async function POST(request: NextRequest) {
   try {
@@ -19,16 +20,6 @@ export async function POST(request: NextRequest) {
     }
 
     const userId = (session.user as any).id;
-
-    // 如果是 Vercel Blob 模式，返回提示使用客户端直传
-    if (isVercelBlob()) {
-      return NextResponse.json({
-        error: '请使用客户端直传模式上传',
-        useDirectUpload: true,
-      }, { status: 400 });
-    }
-
-    // 本地存储模式
     const formData = await request.formData();
     const file = formData.get('file') as File;
     const expireDays = parseInt(formData.get('expireDays') as string) || 7;
@@ -38,10 +29,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '请选择文件' }, { status: 400 });
     }
 
-    // 文件大小限制：500MB
-    const MAX_FILE_SIZE = 500 * 1024 * 1024;
+    // Vercel 模式下检查文件大小（4MB 限制，因为 Serverless 请求体限制 ~4.5MB）
+    if (isVercelBlob() && file.size > 4 * 1024 * 1024) {
+      return NextResponse.json({
+        error: '文件过大，请使用客户端直传模式（大文件自动启用）',
+        useDirectUpload: true,
+      }, { status: 400 });
+    }
+
+    // 本地存储模式或小文件
+    const MAX_FILE_SIZE = isVercelBlob() ? 4 * 1024 * 1024 : 500 * 1024 * 1024;
     if (file.size > MAX_FILE_SIZE) {
-      return NextResponse.json({ error: '文件大小不能超过 500MB' }, { status: 400 });
+      return NextResponse.json({ error: '文件大小超过限制' }, { status: 400 });
     }
 
     // 生成唯一分享码
@@ -54,7 +53,7 @@ export async function POST(request: NextRequest) {
       attempts++;
     }
 
-    // 上传文件到本地存储
+    // 上传文件到存储
     const storageResult = await uploadFile(file, shareCode);
 
     // 计算过期时间
