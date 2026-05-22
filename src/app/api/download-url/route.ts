@@ -3,11 +3,11 @@ import { db } from '@/lib/db';
 
 /**
  * 生成 Vercel Blob 临时签名下载 URL
- * 
+ *
  * 签名 URL 会自动设置正确的 Content-Disposition: attachment 头
  * 浏览器直接访问该 URL 即可下载文件，无需 JS 中转
- * 
- * 有效期：60 秒（足够浏览器发起下载）
+ *
+ * 有效期：120 秒（足够浏览器发起下载）
  */
 export async function GET(request: NextRequest) {
   try {
@@ -56,19 +56,31 @@ export async function GET(request: NextRequest) {
     }
 
     // Vercel Blob 模式 - 生成临时签名 URL
-    const { getDownloadUrl } = await import('@vercel/blob');
-    const { url } = await getDownloadUrl(sharedFile.filePath, {
-      expiresInSeconds: 120, // 2分钟有效期（浏览器需要时间发起连接）
-    });
+    try {
+      const { getDownloadUrl } = await import('@vercel/blob');
+      const { url } = await getDownloadUrl(sharedFile.filePath, {
+        expiresInSeconds: 120, // 2分钟有效期（浏览器需要时间发起连接）
+      });
 
-    console.log(`[download-url] Generated signed URL for ${sharedFile.fileName}`);
+      console.log(`[download-url] Generated signed URL for ${sharedFile.fileName}`);
 
-    return NextResponse.json({
-      downloadUrl: url,
-      fileName: sharedFile.fileName,
-      fileSize: sharedFile.fileSize,
-      isLocal: false,
-    });
+      return NextResponse.json({
+        downloadUrl: url,
+        fileName: sharedFile.fileName,
+        fileSize: sharedFile.fileSize,
+        isLocal: false,
+      });
+    } catch (blobError: any) {
+      console.error('[download-url] Signed URL generation failed:', blobError?.message);
+      // 回退到代理下载（仅适用于小文件）
+      const passwordParam = sharedFile.password && password ? `&password=${encodeURIComponent(password)}` : '';
+      return NextResponse.json({
+        downloadUrl: `/api/download?code=${code}${passwordParam}`,
+        fileName: sharedFile.fileName,
+        fileSize: sharedFile.fileSize,
+        isLocal: true, // 标记为需要代理
+      });
+    }
   } catch (error: any) {
     console.error('[download-url] Error:', error?.message || error);
     return NextResponse.json({ error: '获取下载链接失败' }, { status: 500 });

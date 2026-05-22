@@ -1,5 +1,7 @@
 import { handleUpload } from '@vercel/blob/client';
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 
 /**
  * Vercel Blob 客户端直传处理
@@ -8,29 +10,32 @@ import { NextRequest, NextResponse } from 'next/server';
  * 1. 先 POST 到此路由获取 client token
  * 2. 用 token 直传文件到 Vercel Blob（不经过服务器，无大小限制）
  * 3. 上传完成后 Vercel 会回调此路由（可选）
+ *
+ * ⚠️ 重要：getServerSession 必须在 handleUpload 回调外部调用
+ * 因为 Next.js App Router 的 async local storage 在回调内无法正确传播
  */
 export async function POST(request: NextRequest) {
   try {
-    // handleUpload 需要原始请求和解析后的 body
-    // 注意：request.json() 只能调用一次，之后 body 被消费
-    // handleUpload 不会再次读取 request body（因为提供了 body 参数）
+    // 【关键修复】在 handleUpload 外部获取 session
+    // NextAuth v4 的 getServerSession 依赖 async local storage (headers/cookies)
+    // 在 handleUpload 的回调函数内部，async context 丢失，导致 session 为 null
+    const session = await getServerSession(authOptions);
+
+    if (!session?.user) {
+      console.warn('[upload/init] Unauthorized: no session found');
+      return NextResponse.json({ error: '请先登录' }, { status: 401 });
+    }
+
+    const userId = (session.user as any).id;
+
+    // 解析请求体，传递给 handleUpload
     const body = await request.json();
 
     const result = await handleUpload({
       body,
       request,
       onBeforeGenerateToken: async (pathname, clientPayload, multipart) => {
-        // 验证用户登录
-        const { getServerSession } = await import('next-auth');
-        const { authOptions } = await import('@/lib/auth');
-        const session = await getServerSession(authOptions);
-
-        if (!session?.user) {
-          throw new Error('请先登录');
-        }
-
-        const userId = (session.user as any).id;
-
+        // session 已在外部获取，这里直接使用
         // 解析客户端元数据
         let payload: any = {};
         try {
@@ -62,7 +67,7 @@ export async function POST(request: NextRequest) {
     console.error('[upload/init] Error:', error?.message || error);
     return NextResponse.json(
       { error: error?.message || '初始化上传失败' },
-      { status: error?.message === '请先登录' ? 401 : 500 }
+      { status: 500 }
     );
   }
 }

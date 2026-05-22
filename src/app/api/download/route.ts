@@ -36,47 +36,66 @@ export async function GET(request: NextRequest) {
       data: { downloadCount: { increment: 1 } },
     });
 
-    // 本地文件模式
-    if (!sharedFile.filePath.startsWith('http://') && !sharedFile.filePath.startsWith('https://')) {
-      const { readFile } = await import('fs/promises');
-      const path = await import('path');
-      const localPath = path.join(process.cwd(), 'uploads', sharedFile.filePath);
-
+    // Vercel Blob 模式 - 生成签名 URL 并重定向（不再代理，避免慢速和大小限制）
+    if (sharedFile.filePath.startsWith('http://') || sharedFile.filePath.startsWith('https://')) {
       try {
-        const buffer = await readFile(localPath);
-        return new NextResponse(buffer, {
+        const { getDownloadUrl } = await import('@vercel/blob');
+        const { url } = await getDownloadUrl(sharedFile.filePath, {
+          expiresInSeconds: 120, // 2分钟有效期
+        });
+
+        console.log(`[download] Redirecting to signed URL for ${sharedFile.fileName}`);
+
+        // 302 重定向到签名 URL，让浏览器直接从 Blob 下载
+        // 签名 URL 自带 Content-Disposition: attachment 头
+        return NextResponse.redirect(url);
+      } catch (blobError: any) {
+        console.error('[download] Signed URL failed, trying proxy:', blobError?.message);
+        // 签名 URL 失败时回退到代理模式（仅适用于小文件）
+        const blobResponse = await fetch(sharedFile.filePath, {
           headers: {
-            'Content-Type': sharedFile.mimeType || 'application/octet-stream',
-            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(sharedFile.fileName)}`,
-            'Content-Length': sharedFile.fileSize.toString(),
+            Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}`,
           },
         });
-      } catch {
-        return NextResponse.json({ error: '文件不存在' }, { status: 404 });
+
+        if (!blobResponse.ok) {
+          return NextResponse.json({ error: '文件下载失败' }, { status: 502 });
+        }
+
+        const headers: Record<string, string> = {
+          'Content-Type': blobResponse.headers.get('content-type') || sharedFile.mimeType,
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(sharedFile.fileName)}`,
+        };
+
+        const contentLength = blobResponse.headers.get('content-length');
+        if (contentLength) headers['Content-Length'] = contentLength;
+
+        return new NextResponse(blobResponse.body, { headers });
       }
     }
 
-    // Vercel Blob 模式 - 流式代理下载
-    const blobResponse = await fetch(sharedFile.filePath, {
-      headers: {
-        Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}`,
-      },
-    });
+    // 本地文件模式（仅本地开发环境可用）
+    const { readFile } = await import('fs/promises');
+    const path = await import('path');
+    const localPath = path.join(process.cwd(), 'uploads', sharedFile.filePath);
 
-    if (!blobResponse.ok) {
-      return NextResponse.json({ error: '文件下载失败' }, { status: 502 });
+    try {
+      const buffer = await readFile(localPath);
+      return new NextResponse(buffer, {
+        headers: {
+          'Content-Type': sharedFile.mimeType || 'application/octet-stream',
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(sharedFile.fileName)}`,
+          'Content-Length': sharedFile.fileSize.toString(),
+        },
+      });
+    } catch {
+      // 本地文件不存在（在 Vercel 上这是预期的，因为本地文件不会持久化）
+      console.warn(`[download] Local file not found: ${sharedFile.filePath}`);
+      return NextResponse.json({
+        error: '文件暂不可用，可能需要重新上传',
+        hint: '此文件可能是在系统升级前上传的，存储路径已变更。请联系上传者重新分享。',
+      }, { status: 404 });
     }
-
-    const headers: Record<string, string> = {
-      'Content-Type': blobResponse.headers.get('content-type') || sharedFile.mimeType,
-      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(sharedFile.fileName)}`,
-    };
-
-    const contentLength = blobResponse.headers.get('content-length');
-    if (contentLength) headers['Content-Length'] = contentLength;
-
-    // 流式响应 - 不缓冲整个文件到内存
-    return new NextResponse(blobResponse.body, { headers });
   } catch (error) {
     console.error('Download error:', error);
     return NextResponse.json({ error: '下载失败' }, { status: 500 });

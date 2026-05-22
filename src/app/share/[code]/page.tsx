@@ -371,7 +371,7 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
     try {
       const passwordParam = fileInfo.hasPassword && password ? `&password=${encodeURIComponent(password)}` : '';
 
-      // 获取签名下载URL
+      // 获取签名下载URL（优先直连 Blob，跳过服务器代理）
       let downloadUrl = '';
       let isLocal = false;
 
@@ -382,41 +382,31 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
         if (urlRes.ok && urlData.downloadUrl) {
           downloadUrl = urlData.downloadUrl;
           isLocal = urlData.isLocal || false;
+        } else if (urlData.error) {
+          // 服务端返回了错误（如文件不存在、过期等）
+          toast({
+            title: '下载失败',
+            description: urlData.error,
+            variant: 'destructive',
+          });
+          return;
         }
       } catch {
         // 签名URL获取失败，回退到代理
       }
 
       if (!downloadUrl) {
-        // 回退到代理URL
+        // 回退到代理URL（/api/download 会自动重定向到签名URL）
         downloadUrl = `/api/download?code=${code}${passwordParam}`;
         isLocal = true;
       }
 
-      if (isLocal) {
-        // 本地/代理模式：需要用 fetch + stream（因为代理URL才有正确的 Content-Disposition）
-        // 但也先尝试直接跳转（更简单更快）
-        try {
-          const a = document.createElement('a');
-          a.href = downloadUrl;
-          a.download = fileInfo.fileName;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          setDownloadProgress(100);
-          toast({ title: '下载已开始', description: fileInfo.fileName });
-          return;
-        } catch {
-          // 如果直接下载失败，用 fetch 方式
-        }
-      }
-
-      // 签名URL直连模式：浏览器直接跳转到 Vercel Blob 的签名 URL
-      // 这是最快的方式——浏览器原生下载管理器接管，支持断点续传、多线程下载
+      // 使用 window.open 触发下载
+      // 对于签名URL：浏览器直接从 Blob 下载（最快，支持断点续传）
+      // 对于代理URL：/api/download 会 302 重定向到签名URL
       const a = document.createElement('a');
       a.href = downloadUrl;
-      // 签名URL的响应头已有 Content-Disposition: attachment，浏览器会自动下载
-      a.target = '_blank'; // 新标签页打开，避免当前页面跳转
+      a.target = '_blank';
       a.rel = 'noopener';
       document.body.appendChild(a);
       a.click();
