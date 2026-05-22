@@ -20,6 +20,8 @@ import {
   Sun,
   Moon,
   Share2,
+  Check,
+  FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -87,26 +89,10 @@ function formatDate(dateStr: string): string {
 function getFileIcon(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
   const iconMap: Record<string, string> = {
-    apk: '📱',
-    exe: '💻',
-    dmg: '🍎',
-    zip: '📦',
-    rar: '📦',
-    '7z': '📦',
-    pdf: '📄',
-    doc: '📝',
-    docx: '📝',
-    xls: '📊',
-    xlsx: '📊',
-    ppt: '📊',
-    pptx: '📊',
-    jpg: '🖼️',
-    jpeg: '🖼️',
-    png: '🖼️',
-    gif: '🖼️',
-    mp4: '🎬',
-    mp3: '🎵',
-    txt: '📃',
+    apk: '📱', exe: '💻', dmg: '🍎', zip: '📦', rar: '📦', '7z': '📦',
+    pdf: '📄', doc: '📝', docx: '📝', xls: '📊', xlsx: '📊', ppt: '📊', pptx: '📊',
+    jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '🖼️', webp: '🖼️', svg: '🖼️',
+    mp4: '🎬', webm: '🎬', mp3: '🎵', wav: '🎵', txt: '📃',
   };
   return iconMap[ext] || '📎';
 }
@@ -117,7 +103,7 @@ function getFileExtension(fileName: string): string {
 
 function isImageFile(fileName: string): boolean {
   const ext = getFileExtension(fileName);
-  return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
+  return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext);
 }
 
 function isPdfFile(fileName: string): boolean {
@@ -125,11 +111,15 @@ function isPdfFile(fileName: string): boolean {
 }
 
 function isVideoFile(fileName: string): boolean {
-  return ['mp4', 'webm'].includes(getFileExtension(fileName));
+  return ['mp4', 'webm', 'ogg', 'mov'].includes(getFileExtension(fileName));
 }
 
 function isAudioFile(fileName: string): boolean {
-  return ['mp3', 'wav', 'ogg'].includes(getFileExtension(fileName));
+  return ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a'].includes(getFileExtension(fileName));
+}
+
+function isTextFile(fileName: string): boolean {
+  return ['txt', 'md', 'json', 'xml', 'csv', 'log', 'yml', 'yaml', 'ini', 'conf'].includes(getFileExtension(fileName));
 }
 
 // ==================== ThemeToggle Component ====================
@@ -169,8 +159,9 @@ function ThemeToggle() {
 }
 
 // ==================== Image Preview Component ====================
-function ImagePreview({ code }: { code: string }) {
+function ImagePreview({ code, password }: { code: string; password?: string }) {
   const [imgError, setImgError] = useState(false);
+  const passwordParam = password ? `&password=${encodeURIComponent(password)}` : '';
 
   if (imgError) {
     return (
@@ -184,9 +175,9 @@ function ImagePreview({ code }: { code: string }) {
   return (
     <div className="flex justify-center rounded-lg overflow-hidden border bg-muted/10">
       <img
-        src={`/api/preview?code=${code}`}
+        src={`/api/preview?code=${code}${passwordParam}`}
         alt="文件预览"
-        className="max-h-56 object-contain"
+        className="max-h-72 object-contain"
         onError={() => setImgError(true)}
       />
     </div>
@@ -202,9 +193,11 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
   const [error, setError] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [passwordVerified, setPasswordVerified] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [qrOpen, setQrOpen] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
   const { toast } = useToast();
 
   // Fetch file info on mount
@@ -217,6 +210,10 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
           setError(data.error);
         } else {
           setFileInfo(data.file);
+          // 如果没有密码，直接标记为已验证
+          if (!data.file.hasPassword) {
+            setPasswordVerified(true);
+          }
         }
       } catch {
         setError('获取文件信息失败');
@@ -227,9 +224,26 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
     fetchFileInfo();
   }, [code]);
 
+  // 验证密码
+  const handlePasswordVerify = useCallback(() => {
+    if (!password.trim()) {
+      toast({ title: '请输入提取密码', variant: 'destructive' });
+      return;
+    }
+    // 尝试下载一小部分来验证密码
+    // 简单方案：直接标记已验证，下载时服务端会真正验证
+    setPasswordVerified(true);
+  }, [password, toast]);
+
   // Streaming download with progress tracking
   const handleDownload = useCallback(async () => {
     if (!fileInfo) return;
+
+    // 如果有密码但未验证，提示输入
+    if (fileInfo.hasPassword && !passwordVerified) {
+      toast({ title: '请先输入提取密码', variant: 'destructive' });
+      return;
+    }
 
     setDownloading(true);
     setDownloadProgress(0);
@@ -240,6 +254,11 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({ error: '下载失败' }));
+        if (response.status === 403) {
+          toast({ title: '密码错误', description: '请检查提取密码', variant: 'destructive' });
+          setPasswordVerified(false);
+          return;
+        }
         throw new Error(data.error || '下载失败');
       }
 
@@ -247,7 +266,6 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
       const totalBytes = contentLength ? parseInt(contentLength, 10) : fileInfo.fileSize;
 
       if (!response.body) {
-        // Fallback: no streaming support
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -280,7 +298,6 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
         }
       }
 
-      // Combine chunks into blob
       const blob = new Blob(chunks);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -305,14 +322,16 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
         setDownloadProgress(0);
       }, 1000);
     }
-  }, [fileInfo, code, password, toast]);
+  }, [fileInfo, code, password, passwordVerified, toast]);
 
   // Copy link
   const handleCopyLink = useCallback(async () => {
     const link = window.location.href;
     try {
       await navigator.clipboard.writeText(link);
+      setCopiedLink(true);
       toast({ title: '链接已复制', description: '分享链接已复制到剪贴板' });
+      setTimeout(() => setCopiedLink(false), 2000);
     } catch {
       toast({ title: '复制失败', description: '请手动复制链接', variant: 'destructive' });
     }
@@ -334,7 +353,6 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
   if (error) {
     return (
       <div className="min-h-screen flex flex-col bg-gradient-to-br from-emerald-50/80 via-background to-muted/50 dark:from-emerald-950/20 dark:via-background dark:to-muted/20">
-        {/* Header */}
         <header className="border-b bg-background/80 backdrop-blur-sm sticky top-0 z-10">
           <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -369,6 +387,80 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
   }
 
   if (!fileInfo) return null;
+
+  // 密码验证页面（如果有密码且未验证）
+  if (fileInfo.hasPassword && !passwordVerified) {
+    return (
+      <div className="min-h-screen flex flex-col bg-gradient-to-br from-emerald-50/80 via-background to-muted/50 dark:from-emerald-950/20 dark:via-background dark:to-muted/20">
+        <header className="border-b bg-background/80 backdrop-blur-sm sticky top-0 z-10">
+          <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Share2 className="h-6 w-6 text-emerald-500" />
+              <span className="font-semibold text-lg">FileShare</span>
+            </div>
+            <ThemeToggle />
+          </div>
+        </header>
+
+        <main className="flex-1 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md shadow-lg border-0">
+            <CardContent className="pt-8 space-y-6">
+              <div className="text-center space-y-3">
+                <div className="mx-auto w-16 h-16 rounded-full bg-amber-100 dark:bg-amber-950/50 flex items-center justify-center">
+                  <Lock className="h-8 w-8 text-amber-500" />
+                </div>
+                <h2 className="text-xl font-bold">加密分享</h2>
+                <p className="text-sm text-muted-foreground">此文件需要提取密码才能访问</p>
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex items-center gap-3 bg-muted/30 rounded-lg px-4 py-3">
+                  <div className="text-2xl">{getFileIcon(fileInfo.fileName)}</div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium truncate">{fileInfo.fileName}</p>
+                    <p className="text-xs text-muted-foreground">{formatFileSize(fileInfo.fileSize)}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium flex items-center gap-1.5">
+                    <Lock className="h-3.5 w-3.5 text-amber-500" />
+                    提取密码
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="请输入提取密码"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="pr-10 h-11"
+                      onKeyDown={(e) => e.key === 'Enter' && handlePasswordVerify()}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <Button
+                  onClick={handlePasswordVerify}
+                  className="w-full h-11 bg-amber-500 hover:bg-amber-600 text-white"
+                >
+                  验证密码
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </main>
+      </div>
+    );
+  }
+
+  const passwordParam = fileInfo.hasPassword && password ? `&password=${encodeURIComponent(password)}` : '';
 
   // ==================== File Info Page ====================
   return (
@@ -423,9 +515,7 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Clock className="h-4 w-4 flex-shrink-0" />
               {fileInfo.isExpired ? (
-                <Badge variant="destructive" className="text-xs">
-                  已过期
-                </Badge>
+                <Badge variant="destructive" className="text-xs">已过期</Badge>
               ) : (
                 <span>{formatExpiry(fileInfo.expiresAt)}</span>
               )}
@@ -440,14 +530,14 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
 
             {/* Image Preview */}
             {isImageFile(fileInfo.fileName) && !fileInfo.isExpired && (
-              <ImagePreview code={code} />
+              <ImagePreview code={code} password={fileInfo.hasPassword ? password : undefined} />
             )}
 
             {/* PDF Preview */}
             {isPdfFile(fileInfo.fileName) && !fileInfo.isExpired && (
               <div className="rounded-lg border overflow-hidden bg-background">
                 <iframe
-                  src={`/api/preview?code=${code}`}
+                  src={`/api/preview?code=${code}${passwordParam}`}
                   className="w-full"
                   style={{ height: '400px' }}
                   title="PDF 预览"
@@ -459,7 +549,7 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
             {isVideoFile(fileInfo.fileName) && !fileInfo.isExpired && (
               <div className="rounded-lg border overflow-hidden bg-black/5 dark:bg-black/20">
                 <video
-                  src={`/api/preview?code=${code}`}
+                  src={`/api/preview?code=${code}${passwordParam}`}
                   controls
                   className="max-h-72 w-full object-contain"
                   preload="metadata"
@@ -472,8 +562,17 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
             {/* Audio Preview */}
             {isAudioFile(fileInfo.fileName) && !fileInfo.isExpired && (
               <div className="rounded-lg border p-4 bg-muted/10">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-10 h-10 rounded-full bg-emerald-100 dark:bg-emerald-950/50 flex items-center justify-center">
+                    <Download className="h-5 w-5 text-emerald-500" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium">{fileInfo.fileName}</p>
+                    <p className="text-xs text-muted-foreground">音频文件</p>
+                  </div>
+                </div>
                 <audio
-                  src={`/api/preview?code=${code}`}
+                  src={`/api/preview?code=${code}${passwordParam}`}
                   controls
                   className="w-full"
                   preload="metadata"
@@ -483,36 +582,11 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
               </div>
             )}
 
-            {/* ===== Password Input ===== */}
-            {fileInfo.hasPassword && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium flex items-center gap-1.5">
-                  <Lock className="h-3.5 w-3.5 text-emerald-500" />
-                  提取密码
-                </label>
-                <div className="relative">
-                  <Input
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="请输入提取密码"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="pr-10"
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="absolute right-0 top-0 h-9 w-9 hover:bg-transparent"
-                    onClick={() => setShowPassword(!showPassword)}
-                    aria-label={showPassword ? '隐藏密码' : '显示密码'}
-                  >
-                    {showPassword ? (
-                      <EyeOff className="h-4 w-4 text-muted-foreground" />
-                    ) : (
-                      <Eye className="h-4 w-4 text-muted-foreground" />
-                    )}
-                  </Button>
-                </div>
+            {/* Text file hint */}
+            {isTextFile(fileInfo.fileName) && !fileInfo.isExpired && (
+              <div className="flex items-center gap-2 p-3 bg-muted/30 rounded-lg text-sm text-muted-foreground">
+                <FileText className="h-4 w-4 flex-shrink-0" />
+                <span>文本文件，下载后查看完整内容</span>
               </div>
             )}
 
@@ -547,8 +621,8 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
                 )}
               </Button>
               <Button variant="outline" onClick={handleCopyLink}>
-                <Copy className="h-4 w-4 mr-2" />
-                复制链接
+                {copiedLink ? <Check className="h-4 w-4 mr-2 text-emerald-500" /> : <Copy className="h-4 w-4 mr-2" />}
+                {copiedLink ? '已复制' : '复制链接'}
               </Button>
             </div>
 

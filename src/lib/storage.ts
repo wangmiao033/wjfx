@@ -2,7 +2,7 @@
  * 文件存储工具 - 环境自适应
  *
  * 本地开发：使用本地文件系统 (uploads/ 目录)
- * Vercel 部署：使用 Vercel Blob 对象存储
+ * Vercel 部署：使用 Vercel Blob 对象存储（私有模式）
  *
  * 自动检测：如果存在 BLOB_READ_WRITE_TOKEN 环境变量，则使用 Vercel Blob
  */
@@ -17,7 +17,7 @@ function isVercelBlob(): boolean {
 }
 
 export interface StorageResult {
-  filePath: string; // 本地模式：唯一文件名; Vercel模式：Blob 公开 URL
+  filePath: string; // 本地模式：唯一文件名; Vercel模式：Blob URL
 }
 
 /**
@@ -28,42 +28,6 @@ export async function uploadFile(file: File, shareCode: string): Promise<Storage
     return await uploadToVercelBlob(file, shareCode);
   }
   return await uploadToLocal(file);
-}
-
-/**
- * 获取文件下载响应
- * 本地模式：读取文件并返回
- * Vercel模式：返回重定向到 Blob URL
- */
-export async function downloadFile(filePath: string): Promise<{
-  type: 'file' | 'redirect';
-  buffer?: Buffer;
-  mimeType?: string;
-  fileName?: string;
-  redirectUrl?: string;
-}> {
-  if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
-    // Vercel Blob URL → 重定向
-    const downloadUrl = filePath.includes('?')
-      ? `${filePath}&download=1`
-      : `${filePath}?download=1`;
-    return { type: 'redirect', redirectUrl: downloadUrl };
-  }
-
-  // 本地文件 → 读取并返回
-  const localPath = path.join(process.cwd(), 'uploads', filePath);
-  const buffer = await readFile(localPath);
-
-  // 从文件路径中提取原始文件名（去掉时间戳前缀）
-  const parts = filePath.split('-');
-  const originalName = parts.length > 1 ? parts.slice(1).join('-') : filePath;
-
-  return {
-    type: 'file',
-    buffer,
-    fileName: originalName,
-    mimeType: 'application/octet-stream',
-  };
 }
 
 /**
@@ -105,12 +69,12 @@ async function uploadToLocal(file: File): Promise<StorageResult> {
   return { filePath: uniqueName };
 }
 
-// ==================== Vercel Blob 存储 ====================
+// ==================== Vercel Blob 存储（私有模式） ====================
 
 async function uploadToVercelBlob(file: File, shareCode: string): Promise<StorageResult> {
   const { put } = await import('@vercel/blob');
   const blob = await put(`share/${shareCode}/${file.name}`, file, {
-    access: 'public',
+    access: 'private', // 私有模式 - 必须通过服务端代理访问
   });
   return { filePath: blob.url };
 }

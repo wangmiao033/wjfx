@@ -6,8 +6,18 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id        String       @id @default(cuid())
+  email     String       @unique
+  name      String?
+  password  String
+  createdAt DateTime     @default(now())
+  files     SharedFile[]
 }
 
 model SharedFile {
@@ -17,7 +27,19 @@ model SharedFile {
   filePath      String   // 本地模式：文件名; Vercel模式：Blob URL
   mimeType      String
   shareCode     String   @unique
+  password      String?  // 提取密码（可选）
   downloadCount Int      @default(0)
   expiresAt     DateTime
   createdAt     DateTime @default(now())
+  userId        String?
+  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model VerificationCode {
+  id        String   @id @default(cuid())
+  email     String
+  code      String
+  used      Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
 }

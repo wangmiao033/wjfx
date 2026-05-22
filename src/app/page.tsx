@@ -8,6 +8,7 @@ import {
   Upload, Link2, Copy, Check, Download, Trash2, File, Clock, HardDrive,
   AlertCircle, Loader2, X, Share2, Trash, User, LogOut, Lock, Eye, EyeOff,
   Shield, ShieldOff, Wand2, Search, ChevronDown, Activity, BarChart3,
+  FileUp, FolderOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -41,6 +42,14 @@ interface SharedFileInfo {
   downloadCount: number;
   isExpired: boolean;
   hasPassword?: boolean;
+}
+
+interface UploadingFile {
+  name: string;
+  progress: number;
+  status: 'uploading' | 'done' | 'error';
+  error?: string;
+  shareCode?: string;
 }
 
 function formatFileSize(bytes: number): string {
@@ -84,15 +93,12 @@ function generateRandomPassword(): string {
 }
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024;
-const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024;
 
 function UploadPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [files, setFiles] = useState<SharedFileInfo[]>([]);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadFileName, setUploadFileName] = useState('');
+  const [uploadingFiles, setUploadingFiles] = useState<UploadingFile[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SharedFileInfo | null>(null);
@@ -107,9 +113,6 @@ function UploadPage() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
-  // Success state
-  const [lastUploaded, setLastUploaded] = useState<{ shareCode: string; fileName: string } | null>(null);
-  const [selectedFileSize, setSelectedFileSize] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
@@ -128,6 +131,47 @@ function UploadPage() {
     else if (status !== 'loading') setInitialLoading(false);
   }, [status, fetchFiles]);
 
+  // 使用 XMLHttpRequest 上传以获取真实进度
+  const uploadFileWithProgress = useCallback((
+    file: File,
+    onProgress: (progress: number) => void,
+  ): Promise<{ shareCode: string; fileName: string }> => {
+    return new Promise((resolve, reject) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('expireDays', expireDays);
+      if (enablePassword && password.trim()) formData.append('password', password.trim());
+
+      const xhr = new XMLHttpRequest();
+
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const progress = Math.round((e.loaded / e.total) * 100);
+          onProgress(progress);
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve({ shareCode: data.file.shareCode, fileName: data.file.fileName });
+          } else {
+            reject(new Error(data.error || '上传失败'));
+          }
+        } catch {
+          reject(new Error('上传响应解析失败'));
+        }
+      });
+
+      xhr.addEventListener('error', () => reject(new Error('网络错误')));
+      xhr.addEventListener('abort', () => reject(new Error('上传已取消')));
+
+      xhr.open('POST', '/api/upload');
+      xhr.send(formData);
+    });
+  }, [expireDays, enablePassword, password]);
+
   const handleUpload = async (fileList: FileList | File[]) => {
     const filesToUpload = Array.from(fileList);
     if (filesToUpload.length === 0) return;
@@ -135,38 +179,59 @@ function UploadPage() {
       toast({ title: '请设置密码', variant: 'destructive' }); return;
     }
 
-    setUploading(true);
-    setUploadProgress(0);
-    setLastUploaded(null);
+    // 初始化上传状态
+    const initialUploads: UploadingFile[] = filesToUpload.map(f => ({
+      name: f.name,
+      progress: 0,
+      status: 'uploading' as const,
+    }));
+    setUploadingFiles(initialUploads);
 
-    try {
-      for (let i = 0; i < filesToUpload.length; i++) {
-        const file = filesToUpload[i];
-        setUploadFileName(file.name);
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('expireDays', expireDays);
-        if (enablePassword && password.trim()) formData.append('password', password.trim());
+    let successCount = 0;
+    let lastShareCode = '';
 
-        const res = await fetch('/api/upload', { method: 'POST', body: formData });
-        const data = await res.json();
-        if (!res.ok) {
-          if (res.status === 401) { router.push('/login'); return; }
-          throw new Error(data.error || '上传失败');
-        }
-        setLastUploaded({ shareCode: data.file.shareCode, fileName: data.file.fileName });
-        setUploadProgress(Math.round(((i + 1) / filesToUpload.length) * 100));
+    for (let i = 0; i < filesToUpload.length; i++) {
+      const file = filesToUpload[i];
+
+      // 文件大小校验
+      if (file.size > MAX_FILE_SIZE) {
+        setUploadingFiles(prev => prev.map((u, idx) =>
+          idx === i ? { ...u, status: 'error', error: '文件超过500MB' } : u
+        ));
+        continue;
       }
-      toast({ title: '上传成功', description: `${filesToUpload.length} 个文件已上传` });
-      await fetchFiles();
-    } catch (err) {
-      toast({ title: '上传失败', description: err instanceof Error ? err.message : '未知错误', variant: 'destructive' });
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
-      setUploadFileName('');
-      if (fileInputRef.current) fileInputRef.current.value = '';
+
+      try {
+        const result = await uploadFileWithProgress(file, (progress) => {
+          setUploadingFiles(prev => prev.map((u, idx) =>
+            idx === i ? { ...u, progress } : u
+          ));
+        });
+
+        setUploadingFiles(prev => prev.map((u, idx) =>
+          idx === i ? { ...u, status: 'done', shareCode: result.shareCode } : u
+        ));
+        lastShareCode = result.shareCode;
+        successCount++;
+      } catch (err) {
+        setUploadingFiles(prev => prev.map((u, idx) =>
+          idx === i ? { ...u, status: 'error', error: err instanceof Error ? err.message : '上传失败' } : u
+        ));
+      }
     }
+
+    if (successCount > 0) {
+      toast({ title: '上传成功', description: `${successCount} 个文件已上传` });
+      await fetchFiles();
+    }
+
+    // 3秒后清除上传状态
+    setTimeout(() => {
+      setUploadingFiles(prev => prev.filter(u => u.status === 'uploading'));
+      if (successCount > 0 && filesToUpload.length === successCount) {
+        setUploadingFiles([]);
+      }
+    }, 3000);
   };
 
   const handleDrag = useCallback((e: React.DragEvent) => {
@@ -240,6 +305,8 @@ function UploadPage() {
   const userName = session?.user?.name || session?.user?.email || '';
   const userInitial = userName ? userName.charAt(0).toUpperCase() : '?';
   const userEmail = session?.user?.email || '';
+
+  const isUploading = uploadingFiles.some(u => u.status === 'uploading');
 
   // Loading session
   if (status === 'loading') {
@@ -355,33 +422,6 @@ function UploadPage() {
           </Card>
         </div>
 
-        {/* Upload success banner */}
-        {lastUploaded && !uploading && (
-          <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/30 shadow-sm animate-in slide-in-from-top-2 duration-300">
-            <CardContent className="py-3 px-4">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-900/50 flex items-center justify-center flex-shrink-0">
-                  <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">{lastUploaded.fileName} 上传成功</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <Link2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
-                    <span className="text-xs text-emerald-700 dark:text-emerald-300 font-mono truncate">
-                      {`${window.location.origin}/share/${lastUploaded.shareCode}`}
-                    </span>
-                    <Button variant="ghost" size="sm" className="h-5 px-1.5 text-[10px] text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 flex-shrink-0"
-                      onClick={() => handleCopyLink(lastUploaded.shareCode, 'new')}>
-                      {copiedId === 'new' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                    </Button>
-                  </div>
-                </div>
-                <button onClick={() => setLastUploaded(null)} className="text-emerald-400 hover:text-emerald-600 dark:hover:text-emerald-300"><X className="h-4 w-4" /></button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
         {/* Upload Area */}
         <Card className="border-0 shadow-sm">
           <CardContent className="pt-6 space-y-4">
@@ -389,14 +429,12 @@ function UploadPage() {
               dragActive ? 'border-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/30 scale-[1.01] border-solid'
               : 'border-muted-foreground/20 hover:border-emerald-300 dark:hover:border-emerald-700 hover:bg-muted/30'}`}
               onDragEnter={handleDrag} onDragLeave={handleDrag} onDragOver={handleDrag} onDrop={handleDrop}
-              onClick={() => !uploading && fileInputRef.current?.click()}>
-              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => e.target.files && handleUpload(e.target.files)} disabled={uploading} />
-              {uploading ? (
-                <div className="space-y-4">
-                  <Loader2 className="h-10 w-10 mx-auto text-emerald-500 animate-spin" />
-                  <div><p className="text-sm font-medium">正在上传 {uploadFileName}</p>
-                  <Progress value={uploadProgress} className="max-w-xs mx-auto h-2 mt-3" />
-                  <p className="text-xs text-muted-foreground mt-2">{uploadProgress}%</p></div>
+              onClick={() => !isUploading && fileInputRef.current?.click()}>
+              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => e.target.files && handleUpload(e.target.files)} disabled={isUploading} />
+              {isUploading ? (
+                <div className="space-y-3">
+                  <FileUp className="h-10 w-10 mx-auto text-emerald-500 animate-pulse" />
+                  <p className="text-sm font-medium">正在上传 {uploadingFiles.filter(u => u.status === 'uploading').length} 个文件...</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -405,22 +443,56 @@ function UploadPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium">拖拽文件到此处，或<span className="text-emerald-500">点击上传</span></p>
-                    <p className="text-xs text-muted-foreground mt-1">支持任意文件格式，单文件最大 500MB</p>
+                    <p className="text-xs text-muted-foreground mt-1">支持任意文件格式，单文件最大 500MB，可多选批量上传</p>
                   </div>
                 </div>
               )}
             </div>
 
+            {/* Upload Progress List */}
+            {uploadingFiles.length > 0 && (
+              <div className="space-y-2">
+                {uploadingFiles.map((uf, idx) => (
+                  <div key={idx} className="flex items-center gap-3 bg-muted/30 rounded-lg px-3 py-2">
+                    {uf.status === 'uploading' && <Loader2 className="h-4 w-4 animate-spin text-emerald-500 flex-shrink-0" />}
+                    {uf.status === 'done' && <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />}
+                    {uf.status === 'error' && <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0" />}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-medium truncate">{uf.name}</p>
+                        <span className="text-xs text-muted-foreground ml-2 flex-shrink-0">
+                          {uf.status === 'uploading' ? `${uf.progress}%` : uf.status === 'done' ? '完成' : '失败'}
+                        </span>
+                      </div>
+                      {uf.status === 'uploading' && (
+                        <Progress value={uf.progress} className="h-1.5 mt-1" />
+                      )}
+                      {uf.status === 'error' && uf.error && (
+                        <p className="text-xs text-destructive mt-0.5">{uf.error}</p>
+                      )}
+                    </div>
+                    {uf.status === 'done' && uf.shareCode && (
+                      <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px] text-emerald-600 hover:text-emerald-700 flex-shrink-0"
+                        onClick={() => handleCopyLink(uf.shareCode!, `upload-${idx}`)}>
+                        {copiedId === `upload-${idx}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Upload options */}
             <div className="flex flex-col sm:flex-row gap-4 pt-2">
               <div className="flex-1 space-y-1.5">
                 <Label className="text-xs font-medium text-muted-foreground">保存时长</Label>
-                <Select value={expireDays} onValueChange={setExpireDays}>
+                <Select value={expireDays} onValueChange={setExpireDays} disabled={isUploading}>
                   <SelectTrigger className="h-9"><Clock className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" /><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="1">1 天</SelectItem>
-                    <SelectItem value="7">7 天</SelectItem>
+                    <SelectItem value="7">7 天（推荐）</SelectItem>
                     <SelectItem value="30">30 天</SelectItem>
+                    <SelectItem value="90">90 天</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -429,12 +501,14 @@ function UploadPage() {
                 <div className="flex gap-1.5">
                   <Button type="button" variant={!enablePassword ? 'default' : 'outline'} size="sm"
                     className={`flex-1 h-9 text-xs ${!enablePassword ? 'bg-emerald-500 hover:bg-emerald-600' : ''}`}
-                    onClick={() => { setEnablePassword(false); setPassword(''); }}>
+                    onClick={() => { setEnablePassword(false); setPassword(''); }}
+                    disabled={isUploading}>
                     <ShieldOff className="h-3.5 w-3.5 mr-1.5" />公开分享
                   </Button>
                   <Button type="button" variant={enablePassword ? 'default' : 'outline'} size="sm"
                     className={`flex-1 h-9 text-xs ${enablePassword ? 'bg-amber-500 hover:bg-amber-600' : ''}`}
-                    onClick={() => setEnablePassword(true)}>
+                    onClick={() => setEnablePassword(true)}
+                    disabled={isUploading}>
                     <Shield className="h-3.5 w-3.5 mr-1.5" />加密分享
                   </Button>
                 </div>
@@ -448,13 +522,13 @@ function UploadPage() {
                   <div className="relative flex-1">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input id="upload-password" type={showPassword ? 'text' : 'password'} placeholder="输入 3-20 位提取密码"
-                      value={password} onChange={(e) => setPassword(e.target.value)} className="pl-9 pr-10" maxLength={20} />
+                      value={password} onChange={(e) => setPassword(e.target.value)} className="pl-9 pr-10" maxLength={20} disabled={isUploading} />
                     <button type="button" onClick={() => setShowPassword(!showPassword)}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
                   </div>
-                  <Button type="button" variant="outline" size="sm" className="h-9 px-3 flex-shrink-0" onClick={() => { setPassword(generateRandomPassword()); setEnablePassword(true); }}>
+                  <Button type="button" variant="outline" size="sm" className="h-9 px-3 flex-shrink-0" onClick={() => { setPassword(generateRandomPassword()); setEnablePassword(true); }} disabled={isUploading}>
                     <Wand2 className="h-4 w-4 mr-1.5" />随机
                   </Button>
                 </div>
@@ -553,7 +627,7 @@ function UploadPage() {
         ) : (
           <div className="text-center py-16 text-muted-foreground">
             <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center mx-auto mb-4">
-              <File className="h-8 w-8 opacity-30" />
+              <FolderOpen className="h-8 w-8 opacity-30" />
             </div>
             <p className="text-sm font-medium">还没有分享的文件</p>
             <p className="text-xs mt-1">上传文件即可生成分享链接</p>

@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: '文件不存在' }, { status: 404 });
     }
 
-    // Check if expired
+    // 检查是否过期
     const isExpired = new Date() > sharedFile.expiresAt;
 
     return NextResponse.json({
@@ -30,6 +30,7 @@ export async function GET(request: NextRequest) {
         createdAt: sharedFile.createdAt,
         downloadCount: sharedFile.downloadCount,
         isExpired,
+        hasPassword: !!sharedFile.password,
       },
     });
   } catch (error) {

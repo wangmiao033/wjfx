@@ -4,7 +4,6 @@ import { db } from '@/lib/db';
 export async function GET(request: NextRequest) {
   try {
     const code = request.nextUrl.searchParams.get('code');
-    const password = request.nextUrl.searchParams.get('password');
 
     if (!code) {
       return NextResponse.json({ error: '缺少分享码' }, { status: 400 });
@@ -23,18 +22,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: '分享链接已过期' }, { status: 410 });
     }
 
-    // 检查密码
-    if (sharedFile.password) {
-      if (!password || password !== sharedFile.password) {
-        return NextResponse.json({ error: '密码错误' }, { status: 403 });
-      }
+    // 检查是否有密码保护（预览也需要验证）
+    const password = request.nextUrl.searchParams.get('password');
+    if (sharedFile.password && sharedFile.password !== password) {
+      return NextResponse.json({ error: '需要密码' }, { status: 403 });
     }
-
-    // 增加下载计数
-    await db.sharedFile.update({
-      where: { id: sharedFile.id },
-      data: { downloadCount: { increment: 1 } },
-    });
 
     // 本地文件模式
     if (!sharedFile.filePath.startsWith('http://') && !sharedFile.filePath.startsWith('https://')) {
@@ -47,8 +39,8 @@ export async function GET(request: NextRequest) {
         return new NextResponse(buffer, {
           headers: {
             'Content-Type': sharedFile.mimeType || 'application/octet-stream',
-            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(sharedFile.fileName)}`,
-            'Content-Length': sharedFile.fileSize.toString(),
+            'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(sharedFile.fileName)}`,
+            'Cache-Control': 'public, max-age=3600',
           },
         });
       } catch {
@@ -56,7 +48,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Vercel Blob 模式 - 流式代理下载
+    // Vercel Blob 模式 - 流式代理
     const blobResponse = await fetch(sharedFile.filePath, {
       headers: {
         Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}`,
@@ -64,21 +56,21 @@ export async function GET(request: NextRequest) {
     });
 
     if (!blobResponse.ok) {
-      return NextResponse.json({ error: '文件下载失败' }, { status: 502 });
+      return NextResponse.json({ error: '文件获取失败' }, { status: 502 });
     }
 
     const headers: Record<string, string> = {
       'Content-Type': blobResponse.headers.get('content-type') || sharedFile.mimeType,
-      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(sharedFile.fileName)}`,
+      'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(sharedFile.fileName)}`,
+      'Cache-Control': 'public, max-age=3600',
     };
 
     const contentLength = blobResponse.headers.get('content-length');
     if (contentLength) headers['Content-Length'] = contentLength;
 
-    // 流式响应 - 不缓冲整个文件到内存
     return new NextResponse(blobResponse.body, { headers });
   } catch (error) {
-    console.error('Download error:', error);
-    return NextResponse.json({ error: '下载失败' }, { status: 500 });
+    console.error('Preview error:', error);
+    return NextResponse.json({ error: '预览失败' }, { status: 500 });
   }
 }
