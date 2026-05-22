@@ -5,14 +5,18 @@
  * Vercel 部署：使用 Vercel Blob 对象存储（私有模式）
  *
  * 自动检测：如果存在 BLOB_READ_WRITE_TOKEN 环境变量，则使用 Vercel Blob
+ *
+ * 上传优化：
+ * - Vercel Blob: 客户端直传，跳过服务器中转（大幅提速）
+ * - 本地存储: 仍通过服务器上传
  */
 
 import { randomBytes } from 'crypto';
-import { mkdir, writeFile, readFile, unlink } from 'fs/promises';
+import { mkdir, writeFile, unlink } from 'fs/promises';
 import path from 'path';
 
 // 检测是否在 Vercel 环境且配置了 Blob
-function isVercelBlob(): boolean {
+export function isVercelBlob(): boolean {
   return typeof process.env.BLOB_READ_WRITE_TOKEN === 'string' && process.env.BLOB_READ_WRITE_TOKEN.length > 0;
 }
 
@@ -21,7 +25,7 @@ export interface StorageResult {
 }
 
 /**
- * 上传文件到存储
+ * 上传文件到存储（服务端上传，仅用于本地存储模式）
  */
 export async function uploadFile(file: File, shareCode: string): Promise<StorageResult> {
   if (isVercelBlob()) {
@@ -54,6 +58,25 @@ export async function deleteFile(filePath: string): Promise<void> {
   }
 }
 
+/**
+ * 生成 Vercel Blob 客户端直传的分享码
+ */
+export function generateShareCode(): string {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let code = '';
+  for (let i = 0; i < 8; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
+
+/**
+ * 生成 Blob 存储路径
+ */
+export function generateBlobPath(shareCode: string, fileName: string): string {
+  return `share/${shareCode}/${fileName}`;
+}
+
 // ==================== 本地文件存储 ====================
 
 async function uploadToLocal(file: File): Promise<StorageResult> {
@@ -74,7 +97,7 @@ async function uploadToLocal(file: File): Promise<StorageResult> {
 async function uploadToVercelBlob(file: File, shareCode: string): Promise<StorageResult> {
   const { put } = await import('@vercel/blob');
   const blob = await put(`share/${shareCode}/${file.name}`, file, {
-    access: 'private', // 私有模式 - 必须通过服务端代理访问
+    access: 'private', // 私有模式 - 必须通过签名 URL 访问
   });
   return { filePath: blob.url };
 }

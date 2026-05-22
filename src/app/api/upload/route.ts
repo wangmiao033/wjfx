@@ -2,19 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { uploadFile } from '@/lib/storage';
-import { nanoid } from 'nanoid';
+import { uploadFile, isVercelBlob, generateShareCode } from '@/lib/storage';
 
-// 使用 cuid 风格的短分享码
-function generateShareCode(): string {
-  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-  let code = '';
-  for (let i = 0; i < 8; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return code;
-}
-
+/**
+ * 服务端上传路由
+ *
+ * - Vercel Blob 模式：不使用此路由，改为客户端直传（/api/upload/init + /api/upload/complete）
+ * - 本地存储模式：继续使用此路由上传
+ */
 export async function POST(request: NextRequest) {
   try {
     // 验证登录状态
@@ -25,6 +20,15 @@ export async function POST(request: NextRequest) {
 
     const userId = (session.user as any).id;
 
+    // 如果是 Vercel Blob 模式，返回提示使用客户端直传
+    if (isVercelBlob()) {
+      return NextResponse.json({
+        error: '请使用客户端直传模式上传',
+        useDirectUpload: true,
+      }, { status: 400 });
+    }
+
+    // 本地存储模式
     const formData = await request.formData();
     const file = formData.get('file') as File;
     const expireDays = parseInt(formData.get('expireDays') as string) || 7;
@@ -50,7 +54,7 @@ export async function POST(request: NextRequest) {
       attempts++;
     }
 
-    // 上传文件到存储
+    // 上传文件到本地存储
     const storageResult = await uploadFile(file, shareCode);
 
     // 计算过期时间

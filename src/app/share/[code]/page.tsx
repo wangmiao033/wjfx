@@ -158,12 +158,44 @@ function ThemeToggle() {
   );
 }
 
+// ==================== Signed Media URL Hook ====================
+function useSignedPreviewUrl(code: string, password?: string) {
+  const [url, setUrl] = useState<string | null>(null);
+  const passwordParam = password ? `&password=${encodeURIComponent(password)}` : '';
+
+  React.useEffect(() => {
+    async function fetchUrl() {
+      try {
+        const res = await fetch(`/api/preview-url?code=${code}${passwordParam}`);
+        const data = await res.json();
+        if (res.ok && data.previewUrl) {
+          setUrl(data.previewUrl);
+        } else {
+          setUrl(`/api/preview?code=${code}${passwordParam}`);
+        }
+      } catch {
+        setUrl(`/api/preview?code=${code}${passwordParam}`);
+      }
+    }
+    fetchUrl();
+  }, [code, passwordParam]);
+
+  return url;
+}
 // ==================== Image Preview Component ====================
 function ImagePreview({ code, password }: { code: string; password?: string }) {
   const [imgError, setImgError] = useState(false);
-  const passwordParam = password ? `&password=${encodeURIComponent(password)}` : '';
+  const previewUrl = useSignedPreviewUrl(code, password);
 
-  if (imgError) {
+  if (imgError || !previewUrl) {
+    if (!previewUrl) {
+      return (
+        <div className="flex items-center justify-center h-32 text-muted-foreground text-sm bg-muted/30 rounded-lg border border-dashed">
+          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+          加载预览...
+        </div>
+      );
+    }
     return (
       <div className="flex items-center justify-center h-32 text-muted-foreground text-sm bg-muted/30 rounded-lg border border-dashed">
         <AlertCircle className="h-4 w-4 mr-2" />
@@ -175,11 +207,99 @@ function ImagePreview({ code, password }: { code: string; password?: string }) {
   return (
     <div className="flex justify-center rounded-lg overflow-hidden border bg-muted/10">
       <img
-        src={`/api/preview?code=${code}${passwordParam}`}
+        src={previewUrl}
         alt="文件预览"
         className="max-h-72 object-contain"
         onError={() => setImgError(true)}
       />
+    </div>
+  );
+}
+
+// ==================== Signed PDF Preview ====================
+function SignedPdfPreview({ code, password }: { code: string; password?: string }) {
+  const previewUrl = useSignedPreviewUrl(code, password);
+
+  if (!previewUrl) {
+    return (
+      <div className="flex items-center justify-center h-32 text-muted-foreground text-sm bg-muted/30 rounded-lg border border-dashed">
+        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+        加载PDF预览...
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border overflow-hidden bg-background">
+      <iframe
+        src={previewUrl}
+        className="w-full"
+        style={{ height: '400px' }}
+        title="PDF 预览"
+      />
+    </div>
+  );
+}
+
+// ==================== Signed Video Preview ====================
+function SignedVideoPreview({ code, password }: { code: string; password?: string }) {
+  const previewUrl = useSignedPreviewUrl(code, password);
+
+  if (!previewUrl) {
+    return (
+      <div className="flex items-center justify-center h-32 text-muted-foreground text-sm bg-muted/30 rounded-lg border border-dashed">
+        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+        加载视频预览...
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border overflow-hidden bg-black/5 dark:bg-black/20">
+      <video
+        src={previewUrl}
+        controls
+        className="max-h-72 w-full object-contain"
+        preload="metadata"
+      >
+        您的浏览器不支持视频播放
+      </video>
+    </div>
+  );
+}
+
+// ==================== Signed Audio Preview ====================
+function SignedAudioPreview({ code, password, fileName }: { code: string; password?: string; fileName: string }) {
+  const previewUrl = useSignedPreviewUrl(code, password);
+
+  if (!previewUrl) {
+    return (
+      <div className="flex items-center justify-center h-16 text-muted-foreground text-sm bg-muted/30 rounded-lg border border-dashed">
+        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+        加载音频...
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border p-4 bg-muted/10">
+      <div className="flex items-center gap-3 mb-3">
+        <div className="w-10 h-10 rounded-full bg-emerald-100 dark:bg-emerald-950/50 flex items-center justify-center">
+          <Download className="h-5 w-5 text-emerald-500" />
+        </div>
+        <div className="flex-1">
+          <p className="text-sm font-medium">{fileName}</p>
+          <p className="text-xs text-muted-foreground">音频文件</p>
+        </div>
+      </div>
+      <audio
+        src={previewUrl}
+        controls
+        className="w-full"
+        preload="metadata"
+      >
+        您的浏览器不支持音频播放
+      </audio>
     </div>
   );
 }
@@ -235,7 +355,7 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
     setPasswordVerified(true);
   }, [password, toast]);
 
-  // Streaming download with progress tracking
+  // 高速下载：优先使用签名URL直连Vercel Blob，避免服务器中转
   const handleDownload = useCallback(async () => {
     if (!fileInfo) return;
 
@@ -250,6 +370,74 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
 
     try {
       const passwordParam = fileInfo.hasPassword && password ? `&password=${encodeURIComponent(password)}` : '';
+
+      // 先尝试获取签名URL直连下载
+      try {
+        const urlRes = await fetch(`/api/download-url?code=${code}${passwordParam}`);
+        const urlData = await urlRes.json();
+
+        if (urlRes.ok && urlData.downloadUrl) {
+          // 使用签名URL直接下载（直连Vercel Blob，不经过服务器代理）
+          const directUrl = urlData.downloadUrl;
+
+          // 使用 fetch + stream 跟踪进度
+          const response = await fetch(directUrl);
+          if (!response.ok) throw new Error('直接下载失败');
+
+          const contentLength = response.headers.get('Content-Length');
+          const totalBytes = contentLength ? parseInt(contentLength, 10) : fileInfo.fileSize;
+
+          if (!response.body) {
+            const blob = await response.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = fileInfo.fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+            setDownloadProgress(100);
+            toast({ title: '下载完成', description: `${fileInfo.fileName} 已下载` });
+            return;
+          }
+
+          // 流式读取 + 进度跟踪
+          const reader = response.body.getReader();
+          const chunks: Uint8Array[] = [];
+          let receivedBytes = 0;
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            receivedBytes += value.length;
+            if (totalBytes > 0) {
+              const progress = Math.round((receivedBytes / totalBytes) * 100);
+              setDownloadProgress(progress);
+            }
+          }
+
+          const blob = new Blob(chunks);
+          const blobUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = blobUrl;
+          a.download = fileInfo.fileName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(blobUrl);
+
+          setDownloadProgress(100);
+          toast({ title: '下载完成', description: `${fileInfo.fileName} 已下载` });
+          return;
+        }
+      } catch (directError) {
+        // 签名URL下载失败，回退到服务器代理模式
+        console.log('Direct download failed, falling back to proxy:', directError);
+      }
+
+      // 回退：服务器代理下载（兼容本地存储模式）
       const response = await fetch(`/api/download?code=${code}${passwordParam}`);
 
       if (!response.ok) {
@@ -288,10 +476,8 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         chunks.push(value);
         receivedBytes += value.length;
-
         if (totalBytes > 0) {
           const progress = Math.round((receivedBytes / totalBytes) * 100);
           setDownloadProgress(progress);
@@ -460,8 +646,6 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
     );
   }
 
-  const passwordParam = fileInfo.hasPassword && password ? `&password=${encodeURIComponent(password)}` : '';
-
   // ==================== File Info Page ====================
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-emerald-50/80 via-background to-muted/50 dark:from-emerald-950/20 dark:via-background dark:to-muted/20">
@@ -535,51 +719,17 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
 
             {/* PDF Preview */}
             {isPdfFile(fileInfo.fileName) && !fileInfo.isExpired && (
-              <div className="rounded-lg border overflow-hidden bg-background">
-                <iframe
-                  src={`/api/preview?code=${code}${passwordParam}`}
-                  className="w-full"
-                  style={{ height: '400px' }}
-                  title="PDF 预览"
-                />
-              </div>
+              <SignedPdfPreview code={code} password={fileInfo.hasPassword ? password : undefined} />
             )}
 
             {/* Video Preview */}
             {isVideoFile(fileInfo.fileName) && !fileInfo.isExpired && (
-              <div className="rounded-lg border overflow-hidden bg-black/5 dark:bg-black/20">
-                <video
-                  src={`/api/preview?code=${code}${passwordParam}`}
-                  controls
-                  className="max-h-72 w-full object-contain"
-                  preload="metadata"
-                >
-                  您的浏览器不支持视频播放
-                </video>
-              </div>
+              <SignedVideoPreview code={code} password={fileInfo.hasPassword ? password : undefined} />
             )}
 
             {/* Audio Preview */}
             {isAudioFile(fileInfo.fileName) && !fileInfo.isExpired && (
-              <div className="rounded-lg border p-4 bg-muted/10">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-full bg-emerald-100 dark:bg-emerald-950/50 flex items-center justify-center">
-                    <Download className="h-5 w-5 text-emerald-500" />
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">{fileInfo.fileName}</p>
-                    <p className="text-xs text-muted-foreground">音频文件</p>
-                  </div>
-                </div>
-                <audio
-                  src={`/api/preview?code=${code}${passwordParam}`}
-                  controls
-                  className="w-full"
-                  preload="metadata"
-                >
-                  您的浏览器不支持音频播放
-                </audio>
-              </div>
+              <SignedAudioPreview code={code} password={fileInfo.hasPassword ? password : undefined} fileName={fileInfo.fileName} />
             )}
 
             {/* Text file hint */}

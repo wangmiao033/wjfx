@@ -131,45 +131,95 @@ function UploadPage() {
     else if (status !== 'loading') setInitialLoading(false);
   }, [status, fetchFiles]);
 
-  // 使用 XMLHttpRequest 上传以获取真实进度
-  const uploadFileWithProgress = useCallback((
+  // Vercel Blob 客户端直传（大幅提速：跳过服务器中转）
+  const uploadFileWithProgress = useCallback(async (
     file: File,
     onProgress: (progress: number) => void,
   ): Promise<{ shareCode: string; fileName: string }> => {
-    return new Promise((resolve, reject) => {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('expireDays', expireDays);
-      if (enablePassword && password.trim()) formData.append('password', password.trim());
+    // 先检测是否支持客户端直传
+    try {
+      const { upload } = await import('@vercel/blob/client');
+      const shareCode = Math.random().toString(36).substring(2, 10);
+      const blobPath = `share/${shareCode}/${file.name}`;
 
-      const xhr = new XMLHttpRequest();
-
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          const progress = Math.round((e.loaded / e.total) * 100);
-          onProgress(progress);
-        }
+      const clientPayload = JSON.stringify({
+        expireDays,
+        password: enablePassword && password.trim() ? password.trim() : null,
       });
 
-      xhr.addEventListener('load', () => {
-        try {
-          const data = JSON.parse(xhr.responseText);
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve({ shareCode: data.file.shareCode, fileName: data.file.fileName });
-          } else {
-            reject(new Error(data.error || '上传失败'));
+      const blobResult = await upload(blobPath, file, {
+        access: 'private',
+        handleUploadUrl: '/api/upload/init',
+        clientPayload,
+        multipart: file.size > 10 * 1024 * 1024, // 大于10MB使用分片上传
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.percentage !== undefined) {
+            onProgress(Math.round(progressEvent.percentage));
           }
-        } catch {
-          reject(new Error('上传响应解析失败'));
-        }
+        },
       });
 
-      xhr.addEventListener('error', () => reject(new Error('网络错误')));
-      xhr.addEventListener('abort', () => reject(new Error('上传已取消')));
+      // 直传成功，创建数据库记录
+      const completeRes = await fetch('/api/upload/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          blobUrl: blobResult.url,
+          fileName: file.name,
+          fileSize: file.size,
+          mimeType: file.type || 'application/octet-stream',
+          shareCode,
+          expireDays,
+          password: enablePassword && password.trim() ? password.trim() : null,
+        }),
+      });
 
-      xhr.open('POST', '/api/upload');
-      xhr.send(formData);
-    });
+      const data = await completeRes.json();
+      if (!completeRes.ok) {
+        throw new Error(data.error || '保存记录失败');
+      }
+
+      return { shareCode: data.file.shareCode, fileName: data.file.fileName };
+    } catch (directUploadError: any) {
+      // 如果直传失败（如本地开发环境），回退到服务端上传
+      console.log('Direct upload failed, falling back to server upload:', directUploadError?.message);
+
+      // 回退到 XHR 服务端上传
+      return new Promise((resolve, reject) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('expireDays', expireDays);
+        if (enablePassword && password.trim()) formData.append('password', password.trim());
+
+        const xhr = new XMLHttpRequest();
+
+        xhr.upload.addEventListener('progress', (e) => {
+          if (e.lengthComputable) {
+            const progress = Math.round((e.loaded / e.total) * 100);
+            onProgress(progress);
+          }
+        });
+
+        xhr.addEventListener('load', () => {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve({ shareCode: data.file.shareCode, fileName: data.file.fileName });
+            } else {
+              reject(new Error(data.error || '上传失败'));
+            }
+          } catch {
+            reject(new Error('上传响应解析失败'));
+          }
+        });
+
+        xhr.addEventListener('error', () => reject(new Error('网络错误')));
+        xhr.addEventListener('abort', () => reject(new Error('上传已取消')));
+
+        xhr.open('POST', '/api/upload');
+        xhr.send(formData);
+      });
+    }
   }, [expireDays, enablePassword, password]);
 
   const handleUpload = async (fileList: FileList | File[]) => {
