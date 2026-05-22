@@ -1,51 +1,35 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, Suspense } from 'react';
+import { useSession, signOut } from 'next-auth/react';
+import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
 import {
-  Upload,
-  Link2,
-  Copy,
-  Check,
-  Download,
-  Trash2,
-  File,
-  Clock,
-  HardDrive,
-  ChevronDown,
-  AlertCircle,
-  Loader2,
-  X,
-  Share2,
+  Upload, Link2, Copy, Check, Download, Trash2, File, Clock, HardDrive,
+  AlertCircle, Loader2, X, Share2, Trash, User, LogOut, Lock, Eye, EyeOff,
+  Shield, ShieldOff, Wand2, Search, ChevronDown, Activity, BarChart3,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
+  Card, CardContent, CardDescription, CardHeader, CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuSeparator, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
+import { ThemeToggle } from '@/components/theme-toggle';
 
 interface SharedFileInfo {
   id: string;
@@ -56,6 +40,7 @@ interface SharedFileInfo {
   createdAt: string;
   downloadCount: number;
   isExpired: boolean;
+  hasPassword?: boolean;
 }
 
 function formatFileSize(bytes: number): string {
@@ -67,16 +52,13 @@ function formatFileSize(bytes: number): string {
 }
 
 function formatExpiry(expiresAt: string): string {
-  const now = new Date();
-  const expiry = new Date(expiresAt);
-  const diff = expiry.getTime() - now.getTime();
+  const diff = new Date(expiresAt).getTime() - Date.now();
   if (diff <= 0) return '已过期';
   const days = Math.floor(diff / (1000 * 60 * 60 * 24));
   const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
   if (days > 0) return `${days}天后过期`;
   if (hours > 0) return `${hours}小时后过期`;
-  const minutes = Math.floor(diff / (1000 * 60));
-  return `${minutes}分钟后过期`;
+  return `${Math.floor(diff / (1000 * 60))}分钟后过期`;
 }
 
 function formatDate(dateStr: string): string {
@@ -88,284 +70,125 @@ function formatDate(dateStr: string): string {
 function getFileIcon(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
   const iconMap: Record<string, string> = {
-    apk: '📱',
-    exe: '💻',
-    dmg: '🍎',
-    zip: '📦',
-    rar: '📦',
-    '7z': '📦',
-    pdf: '📄',
-    doc: '📝',
-    docx: '📝',
-    xls: '📊',
-    xlsx: '📊',
-    ppt: '📊',
-    pptx: '📊',
-    jpg: '🖼️',
-    jpeg: '🖼️',
-    png: '🖼️',
-    gif: '🖼️',
-    mp4: '🎬',
-    mp3: '🎵',
-    txt: '📃',
+    apk: '📱', exe: '💻', dmg: '🍎', zip: '📦', rar: '📦', '7z': '📦',
+    pdf: '📄', doc: '📝', docx: '📝', xls: '📊', xlsx: '📊', ppt: '📊', pptx: '📊',
+    jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '🖼️', webp: '🖼️', svg: '🖼️',
+    mp4: '🎬', webm: '🎬', mp3: '🎵', wav: '🎵', txt: '📃',
   };
   return iconMap[ext] || '📎';
 }
 
-// ==================== Share Page Component ====================
-function SharePage({ code }: { code: string }) {
-  const [fileInfo, setFileInfo] = useState<SharedFileInfo | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const { toast } = useToast();
-
-  useEffect(() => {
-    async function fetchFileInfo() {
-      try {
-        const res = await fetch(`/api/share?code=${code}`);
-        const data = await res.json();
-        if (data.error) {
-          setError(data.error);
-        } else {
-          setFileInfo(data.file);
-        }
-      } catch {
-        setError('获取文件信息失败');
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchFileInfo();
-  }, [code]);
-
-  const handleDownload = () => {
-    if (!fileInfo) return;
-    // API returns a redirect to Vercel Blob URL, open in new tab for download
-    window.open(`/api/download?code=${code}`, '_blank');
-    toast({ title: '下载开始', description: `${fileInfo.fileName} 正在下载` });
-  };
-
-  const handleCopyLink = async () => {
-    const link = window.location.href;
-    try {
-      await navigator.clipboard.writeText(link);
-      toast({ title: '链接已复制', description: '分享链接已复制到剪贴板' });
-    } catch {
-      toast({ title: '复制失败', description: '请手动复制链接', variant: 'destructive' });
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="h-10 w-10 animate-spin text-emerald-500" />
-          <p className="text-muted-foreground text-sm">加载中...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
-        <Card className="w-full max-w-md mx-4 border-destructive/30">
-          <CardContent className="pt-6 text-center">
-            <AlertCircle className="h-12 w-12 mx-auto text-destructive mb-4" />
-            <h2 className="text-xl font-semibold mb-2">无法访问</h2>
-            <p className="text-muted-foreground">{error}</p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  if (!fileInfo) return null;
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex flex-col">
-      {/* Header */}
-      <header className="border-b bg-white/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-3xl mx-auto px-4 h-14 flex items-center gap-2">
-          <img src="/logo.svg" alt="FileShare" className="h-7 w-7" />
-          <span className="font-semibold">FileShare</span>
-        </div>
-      </header>
-
-      {/* Main content */}
-      <main className="flex-1 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md shadow-lg border-0">
-          <CardHeader className="pb-3">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-3">
-                <div className="text-3xl">{getFileIcon(fileInfo.fileName)}</div>
-                <div className="min-w-0 flex-1">
-                  <CardTitle className="text-base font-bold break-all leading-snug">
-                    {fileInfo.fileName}
-                  </CardTitle>
-                  <CardDescription className="mt-1 flex items-center gap-3 text-xs">
-                    <span className="flex items-center gap-1">
-                      <HardDrive className="h-3 w-3" />
-                      {formatFileSize(fileInfo.fileSize)}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Download className="h-3 w-3" />
-                      {fileInfo.downloadCount} 次下载
-                    </span>
-                  </CardDescription>
-                </div>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Clock className="h-4 w-4" />
-              {fileInfo.isExpired ? (
-                <Badge variant="destructive" className="text-xs">
-                  已过期
-                </Badge>
-              ) : (
-                <span>{formatExpiry(fileInfo.expiresAt)}</span>
-              )}
-            </div>
-
-            <div className="text-xs text-muted-foreground">
-              上传时间：{formatDate(fileInfo.createdAt)}
-            </div>
-
-            <div className="flex gap-2">
-              <Button
-                onClick={handleDownload}
-                disabled={fileInfo.isExpired}
-                className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                下载文件
-              </Button>
-              <Button variant="outline" onClick={handleCopyLink}>
-                <Copy className="h-4 w-4 mr-2" />
-                复制链接
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t bg-white/50 py-3 text-center text-xs text-muted-foreground">
-        FileShare - 简单快捷的文件分享工具
-      </footer>
-    </div>
-  );
+function generateRandomPassword(): string {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  return Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 }
 
-// ==================== Upload Page Component ====================
+const MAX_FILE_SIZE = 500 * 1024 * 1024;
+const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024;
+
 function UploadPage() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
   const [files, setFiles] = useState<SharedFileInfo[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadFileName, setUploadFileName] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SharedFileInfo | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'date' | 'name' | 'size' | 'downloads'>('date');
+
+  // Upload options
+  const [expireDays, setExpireDays] = useState('7');
+  const [enablePassword, setEnablePassword] = useState(false);
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Success state
+  const [lastUploaded, setLastUploaded] = useState<{ shareCode: string; fileName: string } | null>(null);
+  const [selectedFileSize, setSelectedFileSize] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
   const fetchFiles = useCallback(async () => {
     try {
       const res = await fetch('/api/files');
+      if (res.status === 401) { setFiles([]); return; }
       const data = await res.json();
-      if (data.files) {
-        setFiles(data.files);
-      }
-    } catch {
-      // silently fail
-    }
+      if (data.files) setFiles(data.files);
+    } catch { /* silently fail */ }
+    finally { setInitialLoading(false); }
   }, []);
 
   useEffect(() => {
-    fetchFiles();
-  }, [fetchFiles]);
+    if (status === 'authenticated') fetchFiles();
+    else if (status !== 'loading') setInitialLoading(false);
+  }, [status, fetchFiles]);
 
   const handleUpload = async (fileList: FileList | File[]) => {
     const filesToUpload = Array.from(fileList);
     if (filesToUpload.length === 0) return;
+    if (enablePassword && !password.trim()) {
+      toast({ title: '请设置密码', variant: 'destructive' }); return;
+    }
 
     setUploading(true);
     setUploadProgress(0);
+    setLastUploaded(null);
 
     try {
-      // Upload files one by one
       for (let i = 0; i < filesToUpload.length; i++) {
         const file = filesToUpload[i];
+        setUploadFileName(file.name);
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('expireDays', '14');
+        formData.append('expireDays', expireDays);
+        if (enablePassword && password.trim()) formData.append('password', password.trim());
 
-        const res = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-        });
-
+        const res = await fetch('/api/upload', { method: 'POST', body: formData });
         const data = await res.json();
-
         if (!res.ok) {
+          if (res.status === 401) { router.push('/login'); return; }
           throw new Error(data.error || '上传失败');
         }
-
+        setLastUploaded({ shareCode: data.file.shareCode, fileName: data.file.fileName });
         setUploadProgress(Math.round(((i + 1) / filesToUpload.length) * 100));
       }
-
-      toast({
-        title: '上传成功',
-        description: `${filesToUpload.length} 个文件已上传，分享链接已生成`,
-      });
-
+      toast({ title: '上传成功', description: `${filesToUpload.length} 个文件已上传` });
       await fetchFiles();
     } catch (err) {
-      toast({
-        title: '上传失败',
-        description: err instanceof Error ? err.message : '未知错误',
-        variant: 'destructive',
-      });
+      toast({ title: '上传失败', description: err instanceof Error ? err.message : '未知错误', variant: 'destructive' });
     } finally {
       setUploading(false);
       setUploadProgress(0);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      setUploadFileName('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
   const handleDrag = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true);
-    } else if (e.type === 'dragleave') {
-      setDragActive(false);
-    }
+    e.preventDefault(); e.stopPropagation();
+    setDragActive(e.type === 'dragenter' || e.type === 'dragover');
   }, []);
 
   const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation();
     setDragActive(false);
-
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleUpload(e.dataTransfer.files);
-    }
+    if (e.dataTransfer.files?.length) handleUpload(e.dataTransfer.files);
   };
 
   const handleCopyLink = async (shareCode: string, fileId: string) => {
-    const link = `${window.location.origin}/?s=${shareCode}`;
+    const link = `${window.location.origin}/share/${shareCode}`;
     try {
       await navigator.clipboard.writeText(link);
       setCopiedId(fileId);
-      toast({ title: '链接已复制', description: '分享链接已复制到剪贴板' });
+      toast({ title: '链接已复制' });
       setTimeout(() => setCopiedId(null), 2000);
     } catch {
-      toast({ title: '复制失败', description: '请手动复制链接', variant: 'destructive' });
+      toast({ title: '复制失败', variant: 'destructive' });
     }
   };
 
@@ -374,190 +197,344 @@ function UploadPage() {
     setDeleting(true);
     try {
       const res = await fetch('/api/delete', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: deleteTarget.id }),
       });
       const data = await res.json();
-      if (data.success) {
-        toast({ title: '删除成功', description: `${deleteTarget.fileName} 已删除` });
-        await fetchFiles();
-      } else {
-        throw new Error(data.error || '删除失败');
-      }
+      if (data.success) { toast({ title: '删除成功' }); await fetchFiles(); }
+      else throw new Error(data.error || '删除失败');
     } catch (err) {
-      toast({
-        title: '删除失败',
-        description: err instanceof Error ? err.message : '未知错误',
-        variant: 'destructive',
-      });
-    } finally {
-      setDeleting(false);
-      setDeleteTarget(null);
-    }
+      toast({ title: '删除失败', description: err instanceof Error ? err.message : '未知错误', variant: 'destructive' });
+    } finally { setDeleting(false); setDeleteTarget(null); }
   };
 
+  const handleCleanupExpired = async () => {
+    const expired = files.filter(f => f.isExpired);
+    if (!expired.length) return;
+    setDeleting(true);
+    try {
+      for (const file of expired) await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: file.id }) });
+      toast({ title: '清理完成', description: `已清理 ${expired.length} 个过期文件` });
+      await fetchFiles();
+    } catch { toast({ title: '清理失败', variant: 'destructive' }); }
+    finally { setDeleting(false); }
+  };
+
+  // Filter and sort files
+  const filteredFiles = files
+    .filter(f => !searchQuery || f.fileName.toLowerCase().includes(searchQuery.toLowerCase()))
+    .sort((a, b) => {
+      switch (sortBy) {
+        case 'name': return a.fileName.localeCompare(b.fileName);
+        case 'size': return b.fileSize - a.fileSize;
+        case 'downloads': return b.downloadCount - a.downloadCount;
+        default: return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      }
+    });
+
+  const activeCount = files.filter(f => !f.isExpired).length;
+  const expiredCount = files.filter(f => f.isExpired).length;
+  const totalSize = files.reduce((sum, f) => sum + f.fileSize, 0);
+  const totalDownloads = files.reduce((sum, f) => sum + f.downloadCount, 0);
+
+  const userName = session?.user?.name || session?.user?.email || '';
+  const userInitial = userName ? userName.charAt(0).toUpperCase() : '?';
+  const userEmail = session?.user?.email || '';
+
+  // Loading session
+  if (status === 'loading') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50/80 via-background to-muted/50 dark:from-emerald-950/20 dark:via-background dark:to-muted/20">
+        <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
+      </div>
+    );
+  }
+
+  // Not authenticated
+  if (status === 'unauthenticated') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-50/80 via-background to-muted/50 dark:from-emerald-950/20 dark:via-background dark:to-muted/20 flex flex-col">
+        <header className="border-b bg-background/80 backdrop-blur-sm sticky top-0 z-10">
+          <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-emerald-500 flex items-center justify-center"><Share2 className="h-4 w-4 text-white" /></div>
+              <span className="font-semibold text-lg">FileShare</span>
+            </div>
+            <ThemeToggle />
+          </div>
+        </header>
+        <main className="flex-1 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md shadow-lg border-0">
+            <CardContent className="pt-8 pb-6 text-center space-y-4">
+              <div className="mx-auto w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-950/50 flex items-center justify-center">
+                <User className="h-8 w-8 text-emerald-500" />
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-xl font-bold">请先登录</h2>
+                <p className="text-sm text-muted-foreground">登录后即可上传和管理分享的文件</p>
+              </div>
+              <div className="flex flex-col gap-2 pt-2">
+                <Button className="bg-emerald-500 hover:bg-emerald-600 text-white h-11" onClick={() => router.push('/login')}>登录</Button>
+                <Button variant="outline" className="h-11" onClick={() => router.push('/register')}>注册新账号</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </main>
+        <footer className="border-t bg-background/50 py-3 text-center text-xs text-muted-foreground mt-auto">FileShare - 简单快捷的文件分享工具</footer>
+      </div>
+    );
+  }
+
+  // Authenticated view
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex flex-col">
+    <div className="min-h-screen bg-gradient-to-br from-emerald-50/80 via-background to-muted/50 dark:from-emerald-950/20 dark:via-background dark:to-muted/20 flex flex-col">
       {/* Header */}
-      <header className="border-b bg-white/80 backdrop-blur-sm sticky top-0 z-10">
+      <header className="border-b bg-background/80 backdrop-blur-sm sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <img src="/logo.svg" alt="FileShare" className="h-7 w-7" />
+            <div className="w-7 h-7 rounded-lg bg-emerald-500 flex items-center justify-center"><Share2 className="h-4 w-4 text-white" /></div>
             <span className="font-semibold text-lg">FileShare</span>
-            <Badge variant="secondary" className="text-xs">
-              文件分享
-            </Badge>
+            <Badge variant="secondary" className="text-xs">文件分享</Badge>
           </div>
-          <div className="text-xs text-muted-foreground">
-            共 {files.length} 个文件
+          <div className="flex items-center gap-3">
+            {activeCount > 0 && <span className="text-xs text-muted-foreground hidden sm:inline">{activeCount} 个有效</span>}
+            {expiredCount > 0 && (
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive" onClick={handleCleanupExpired} disabled={deleting}>
+                <Trash className="h-3 w-3 mr-1" /><span className="hidden sm:inline">清理过期</span>
+              </Button>
+            )}
+            <ThemeToggle />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="h-8 px-2 gap-2">
+                  <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center text-white text-xs font-medium">{userInitial}</div>
+                  <span className="text-sm hidden sm:inline max-w-[120px] truncate">{userName}</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <div className="px-2 py-1.5">
+                  <p className="text-sm font-medium">{userName}</p>
+                  <p className="text-xs text-muted-foreground truncate">{userEmail}</p>
+                </div>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => signOut({ redirect: false }).then(() => router.push('/login'))} className="text-destructive focus:text-destructive cursor-pointer">
+                  <LogOut className="h-4 w-4 mr-2" />退出登录
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </header>
 
-      {/* Main content */}
       <main className="flex-1 max-w-4xl mx-auto w-full px-4 py-6 space-y-6">
+        {/* Stats Panel */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Card className="border-0 shadow-sm">
+            <CardContent className="p-3 text-center">
+              <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{files.length}</div>
+              <div className="text-xs text-muted-foreground flex items-center justify-center gap-1 mt-1"><File className="h-3 w-3" />总文件</div>
+            </CardContent>
+          </Card>
+          <Card className="border-0 shadow-sm">
+            <CardContent className="p-3 text-center">
+              <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{activeCount}</div>
+              <div className="text-xs text-muted-foreground flex items-center justify-center gap-1 mt-1"><Activity className="h-3 w-3" />有效文件</div>
+            </CardContent>
+          </Card>
+          <Card className="border-0 shadow-sm">
+            <CardContent className="p-3 text-center">
+              <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">{formatFileSize(totalSize)}</div>
+              <div className="text-xs text-muted-foreground flex items-center justify-center gap-1 mt-1"><HardDrive className="h-3 w-3" />存储用量</div>
+            </CardContent>
+          </Card>
+          <Card className="border-0 shadow-sm">
+            <CardContent className="p-3 text-center">
+              <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">{totalDownloads}</div>
+              <div className="text-xs text-muted-foreground flex items-center justify-center gap-1 mt-1"><BarChart3 className="h-3 w-3" />总下载</div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Upload success banner */}
+        {lastUploaded && !uploading && (
+          <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/30 shadow-sm animate-in slide-in-from-top-2 duration-300">
+            <CardContent className="py-3 px-4">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-900/50 flex items-center justify-center flex-shrink-0">
+                  <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">{lastUploaded.fileName} 上传成功</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <Link2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+                    <span className="text-xs text-emerald-700 dark:text-emerald-300 font-mono truncate">
+                      {`${window.location.origin}/share/${lastUploaded.shareCode}`}
+                    </span>
+                    <Button variant="ghost" size="sm" className="h-5 px-1.5 text-[10px] text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 flex-shrink-0"
+                      onClick={() => handleCopyLink(lastUploaded.shareCode, 'new')}>
+                      {copiedId === 'new' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                    </Button>
+                  </div>
+                </div>
+                <button onClick={() => setLastUploaded(null)} className="text-emerald-400 hover:text-emerald-600 dark:hover:text-emerald-300"><X className="h-4 w-4" /></button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Upload Area */}
         <Card className="border-0 shadow-sm">
-          <CardContent className="pt-6">
-            <div
-              className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-all duration-200 cursor-pointer ${
-                dragActive
-                  ? 'border-emerald-400 bg-emerald-50/50 scale-[1.01]'
-                  : 'border-gray-200 hover:border-emerald-300 hover:bg-gray-50/50'
-              }`}
-              onDragEnter={handleDrag}
-              onDragLeave={handleDrag}
-              onDragOver={handleDrag}
-              onDrop={handleDrop}
-              onClick={() => !uploading && fileInputRef.current?.click()}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(e) => e.target.files && handleUpload(e.target.files)}
-                disabled={uploading}
-              />
-
+          <CardContent className="pt-6 space-y-4">
+            <div className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-all duration-300 cursor-pointer group ${
+              dragActive ? 'border-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/30 scale-[1.01] border-solid'
+              : 'border-muted-foreground/20 hover:border-emerald-300 dark:hover:border-emerald-700 hover:bg-muted/30'}`}
+              onDragEnter={handleDrag} onDragLeave={handleDrag} onDragOver={handleDrag} onDrop={handleDrop}
+              onClick={() => !uploading && fileInputRef.current?.click()}>
+              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => e.target.files && handleUpload(e.target.files)} disabled={uploading} />
               {uploading ? (
                 <div className="space-y-4">
                   <Loader2 className="h-10 w-10 mx-auto text-emerald-500 animate-spin" />
-                  <p className="text-sm font-medium">上传中...</p>
-                  <Progress value={uploadProgress} className="max-w-xs mx-auto h-2" />
-                  <p className="text-xs text-muted-foreground">{uploadProgress}%</p>
+                  <div><p className="text-sm font-medium">正在上传 {uploadFileName}</p>
+                  <Progress value={uploadProgress} className="max-w-xs mx-auto h-2 mt-3" />
+                  <p className="text-xs text-muted-foreground mt-2">{uploadProgress}%</p></div>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <div className="mx-auto w-14 h-14 rounded-full bg-emerald-50 flex items-center justify-center">
+                  <div className="mx-auto w-14 h-14 rounded-full bg-emerald-50 dark:bg-emerald-950/50 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
                     <Upload className="h-7 w-7 text-emerald-500" />
                   </div>
                   <div>
-                    <p className="text-sm font-medium">
-                      拖拽文件到此处，或<span className="text-emerald-500">点击上传</span>
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      支持 APK、EXE、ZIP 等任意文件格式，单文件最大 500MB
-                    </p>
+                    <p className="text-sm font-medium">拖拽文件到此处，或<span className="text-emerald-500">点击上传</span></p>
+                    <p className="text-xs text-muted-foreground mt-1">支持任意文件格式，单文件最大 500MB</p>
                   </div>
                 </div>
               )}
             </div>
+
+            {/* Upload options */}
+            <div className="flex flex-col sm:flex-row gap-4 pt-2">
+              <div className="flex-1 space-y-1.5">
+                <Label className="text-xs font-medium text-muted-foreground">保存时长</Label>
+                <Select value={expireDays} onValueChange={setExpireDays}>
+                  <SelectTrigger className="h-9"><Clock className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" /><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">1 天</SelectItem>
+                    <SelectItem value="7">7 天</SelectItem>
+                    <SelectItem value="30">30 天</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex-1 space-y-1.5">
+                <Label className="text-xs font-medium text-muted-foreground">加密方式</Label>
+                <div className="flex gap-1.5">
+                  <Button type="button" variant={!enablePassword ? 'default' : 'outline'} size="sm"
+                    className={`flex-1 h-9 text-xs ${!enablePassword ? 'bg-emerald-500 hover:bg-emerald-600' : ''}`}
+                    onClick={() => { setEnablePassword(false); setPassword(''); }}>
+                    <ShieldOff className="h-3.5 w-3.5 mr-1.5" />公开分享
+                  </Button>
+                  <Button type="button" variant={enablePassword ? 'default' : 'outline'} size="sm"
+                    className={`flex-1 h-9 text-xs ${enablePassword ? 'bg-amber-500 hover:bg-amber-600' : ''}`}
+                    onClick={() => setEnablePassword(true)}>
+                    <Shield className="h-3.5 w-3.5 mr-1.5" />加密分享
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            {enablePassword && (
+              <div className="space-y-1.5 animate-in slide-in-from-top-2 duration-200">
+                <Label htmlFor="upload-password" className="text-xs font-medium text-muted-foreground">提取密码</Label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input id="upload-password" type={showPassword ? 'text' : 'password'} placeholder="输入 3-20 位提取密码"
+                      value={password} onChange={(e) => setPassword(e.target.value)} className="pl-9 pr-10" maxLength={20} />
+                    <button type="button" onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" className="h-9 px-3 flex-shrink-0" onClick={() => { setPassword(generateRandomPassword()); setEnablePassword(true); }}>
+                    <Wand2 className="h-4 w-4 mr-1.5" />随机
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
         {/* File List */}
-        {files.length > 0 && (
+        {initialLoading ? (
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-muted-foreground">已分享的文件</h2>
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Card key={i} className="border-0 shadow-sm"><CardContent className="py-3 px-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-8 w-8 rounded-lg bg-muted animate-pulse" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 w-48 bg-muted animate-pulse rounded" />
+                    <div className="h-3 w-36 bg-muted animate-pulse rounded" />
+                  </div>
+                </div>
+              </CardContent></Card>
+            ))}
+          </div>
+        ) : files.length > 0 ? (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-muted-foreground whitespace-nowrap">已分享的文件</h2>
+              <div className="flex items-center gap-2 flex-1 justify-end">
+                <div className="relative max-w-[200px]">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input placeholder="搜索文件..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                    className="h-8 pl-8 text-xs" />
+                </div>
+                <Select value={sortBy} onValueChange={(v) => setSortBy(v as any)}>
+                  <SelectTrigger className="h-8 w-auto text-xs gap-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="date">最新</SelectItem>
+                    <SelectItem value="name">名称</SelectItem>
+                    <SelectItem value="size">大小</SelectItem>
+                    <SelectItem value="downloads">下载量</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             <div className="space-y-2">
-              {files.map((file) => (
-                <Card
-                  key={file.id}
-                  className={`border-0 shadow-sm transition-all duration-200 hover:shadow-md ${
-                    file.isExpired ? 'opacity-60' : ''
-                  }`}
-                >
+              {filteredFiles.map((file) => (
+                <Card key={file.id} className={`border-0 shadow-sm transition-all hover:shadow-md ${file.isExpired ? 'opacity-60' : ''}`}>
                   <CardContent className="py-3 px-4">
                     <div className="flex items-center gap-3">
-                      {/* File icon */}
-                      <div className="text-2xl flex-shrink-0">
-                        {getFileIcon(file.fileName)}
-                      </div>
-
-                      {/* File info */}
+                      <div className="text-2xl flex-shrink-0">{getFileIcon(file.fileName)}</div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <p className="text-sm font-semibold truncate">
-                            {file.fileName}
-                          </p>
-                          {file.isExpired && (
-                            <Badge variant="destructive" className="text-[10px] px-1.5 py-0 flex-shrink-0">
-                              已过期
-                            </Badge>
-                          )}
+                          <p className="text-sm font-semibold truncate">{file.fileName}</p>
+                          {file.isExpired && <Badge variant="destructive" className="text-[10px] px-1.5 py-0 flex-shrink-0">已过期</Badge>}
+                          {file.hasPassword && <Lock className="h-3 w-3 text-amber-500 flex-shrink-0" />}
                         </div>
                         <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
-                          <span className="flex items-center gap-1">
-                            <HardDrive className="h-3 w-3" />
-                            {formatFileSize(file.fileSize)}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Clock className="h-3 w-3" />
-                            {file.isExpired ? '已过期' : formatExpiry(file.expiresAt)}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Download className="h-3 w-3" />
-                            {file.downloadCount} 次
-                          </span>
+                          <span className="flex items-center gap-1"><HardDrive className="h-3 w-3" />{formatFileSize(file.fileSize)}</span>
+                          <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{file.isExpired ? '已过期' : formatExpiry(file.expiresAt)}</span>
+                          <span className="flex items-center gap-1"><Download className="h-3 w-3" />{file.downloadCount} 次</span>
                         </div>
                       </div>
-
-                      {/* Actions */}
                       <div className="flex items-center gap-1 flex-shrink-0">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 px-2 text-xs"
-                          onClick={() => handleCopyLink(file.shareCode, file.id)}
-                          disabled={file.isExpired}
-                        >
-                          {copiedId === file.id ? (
-                            <Check className="h-3.5 w-3.5 text-emerald-500" />
-                          ) : (
-                            <Copy className="h-3.5 w-3.5" />
-                          )}
+                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => handleCopyLink(file.shareCode, file.id)} disabled={file.isExpired}>
+                          {copiedId === file.id ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 px-2 text-xs text-destructive hover:text-destructive"
-                          onClick={() => setDeleteTarget(file)}
-                        >
+                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs text-destructive hover:text-destructive" onClick={() => setDeleteTarget(file)}>
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     </div>
-
-                    {/* Share link */}
                     {!file.isExpired && (
-                      <div className="mt-2 flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
+                      <div className="mt-2 flex items-center gap-2 bg-muted/50 rounded-lg px-3 py-1.5">
                         <Link2 className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                         <span className="text-xs text-muted-foreground truncate flex-1 font-mono">
-                          {typeof window !== 'undefined'
-                            ? `${window.location.origin}/?s=${file.shareCode}`
-                            : `/?s=${file.shareCode}`}
+                          {`${window.location.origin}/share/${file.shareCode}`}
                         </span>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 px-2 text-[11px] text-emerald-600 hover:text-emerald-700"
-                          onClick={() => handleCopyLink(file.shareCode, file.id)}
-                        >
+                        <Button variant="ghost" size="sm" className="h-5 px-2 text-[11px] text-emerald-600 hover:text-emerald-700"
+                          onClick={() => handleCopyLink(file.shareCode, file.id)}>
                           {copiedId === file.id ? '已复制' : '复制'}
                         </Button>
                       </div>
@@ -565,49 +542,37 @@ function UploadPage() {
                   </CardContent>
                 </Card>
               ))}
+              {filteredFiles.length === 0 && searchQuery && (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Search className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">未找到匹配的文件</p>
+                </div>
+              )}
             </div>
           </div>
-        )}
-
-        {/* Empty state */}
-        {files.length === 0 && (
-          <div className="text-center py-12 text-muted-foreground">
-            <File className="h-12 w-12 mx-auto mb-3 opacity-30" />
-            <p className="text-sm">还没有分享的文件</p>
+        ) : (
+          <div className="text-center py-16 text-muted-foreground">
+            <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center mx-auto mb-4">
+              <File className="h-8 w-8 opacity-30" />
+            </div>
+            <p className="text-sm font-medium">还没有分享的文件</p>
             <p className="text-xs mt-1">上传文件即可生成分享链接</p>
           </div>
         )}
       </main>
 
-      {/* Footer */}
-      <footer className="border-t bg-white/50 py-3 text-center text-xs text-muted-foreground mt-auto">
-        FileShare - 简单快捷的文件分享工具
-      </footer>
+      <footer className="border-t bg-background/50 py-3 text-center text-xs text-muted-foreground mt-auto">FileShare - 简单快捷的文件分享工具</footer>
 
-      {/* Delete confirmation dialog */}
       <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>确认删除</AlertDialogTitle>
-            <AlertDialogDescription>
-              确定要删除 <span className="font-semibold">{deleteTarget?.fileName}</span> 吗？删除后分享链接将失效，此操作不可恢复。
-            </AlertDialogDescription>
+            <AlertDialogDescription>确定要删除 <span className="font-semibold">{deleteTarget?.fileName}</span> 吗？此操作不可恢复。</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleDelete}
-              disabled={deleting}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {deleting ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  删除中...
-                </>
-              ) : (
-                '确认删除'
-              )}
+            <AlertDialogAction onClick={handleDelete} disabled={deleting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {deleting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />删除中...</> : '确认删除'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -616,14 +581,38 @@ function UploadPage() {
   );
 }
 
-// ==================== Main Page ====================
-export default function Home() {
+// Main page with Suspense for useSearchParams
+function HomeContent() {
   const searchParams = useSearchParams();
   const shareCode = searchParams.get('s');
 
+  // Redirect old ?s=code format to /share/code
+  const router = useRouter();
+  useEffect(() => {
+    if (shareCode) {
+      router.replace(`/share/${shareCode}`);
+    }
+  }, [shareCode, router]);
+
   if (shareCode) {
-    return <SharePage code={shareCode} />;
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
+      </div>
+    );
   }
 
   return <UploadPage />;
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50/80 via-background to-muted/50 dark:from-emerald-950/20 dark:via-background dark:to-muted/20">
+        <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
+      </div>
+    }>
+      <HomeContent />
+    </Suspense>
+  );
 }
