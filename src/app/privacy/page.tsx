@@ -3,7 +3,7 @@ import policyContent from "./policy-content.json";
 
 export const metadata: Metadata = {
   title: "隐私政策",
-  description: "广州超凡响应网络科技有限公司隐私政策",
+  description: "隐私政策",
 };
 
 function isSectionTitle(text: string) {
@@ -21,19 +21,9 @@ export default function PrivacyPage() {
   const body = paragraphs.slice(4);
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="border-b bg-white">
-        <div className="mx-auto flex h-14 max-w-4xl items-center justify-between px-4">
-          <a href="/" className="flex items-center gap-2 text-sm font-semibold">
-            <img src="/logo.svg" alt="" className="h-7 w-7" />
-            FileShare
-          </a>
-          <span className="text-xs text-slate-500">Privacy Policy</span>
-        </div>
-      </header>
-
-      <article className="mx-auto max-w-4xl px-4 py-8 sm:py-10">
-        <div className="rounded-lg border bg-white px-5 py-7 shadow-sm sm:px-8 sm:py-9">
+    <main className="min-h-screen bg-white text-slate-900">
+      <article className="mx-auto max-w-3xl px-5 py-8 sm:py-12">
+        <div>
           <h1 className="text-2xl font-bold tracking-normal sm:text-3xl">
             {title}
           </h1>
