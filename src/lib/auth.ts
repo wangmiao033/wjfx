@@ -8,20 +8,23 @@ export const authOptions: NextAuthOptions = {
     CredentialsProvider({
       name: 'credentials',
       credentials: {
-        email: { label: '邮箱', type: 'email' },
+        email: { label: '邮箱或账号', type: 'text' },
         password: { label: '密码', type: 'password' },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
-          throw new Error('请输入邮箱和密码');
+          throw new Error('请输入邮箱/账号和密码');
         }
 
-        const user = await db.user.findUnique({
-          where: { email: credentials.email },
-        });
+        const identifier = credentials.email.trim();
+        const isEmail = identifier.includes('@');
+
+        const user = isEmail
+          ? await db.user.findUnique({ where: { email: identifier } })
+          : await db.user.findFirst({ where: { name: identifier } });
 
         if (!user) {
-          throw new Error('邮箱或密码错误');
+          throw new Error('邮箱/账号或密码错误');
         }
 
         const isPasswordValid = await bcrypt.compare(

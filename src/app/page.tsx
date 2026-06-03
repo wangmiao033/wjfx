@@ -3,12 +3,13 @@
 import { useState, useCallback, useEffect, useRef, Suspense } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
   Upload, Link2, Copy, Check, Download, Trash2, File, Clock, HardDrive,
   AlertCircle, Loader2, X, Share2, Trash, User, LogOut, Lock, Eye, EyeOff,
   Shield, ShieldOff, Wand2, Search, ChevronDown, Activity, BarChart3,
-  FileUp, FolderOpen,
+  FileUp, FolderOpen, Package,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -459,6 +460,11 @@ function UploadPage() {
             <Badge variant="secondary" className="text-xs">文件分享</Badge>
           </div>
           <div className="flex items-center gap-3">
+            <Link href="/deliver">
+              <Button variant="ghost" size="sm" className="h-8 text-xs hidden sm:flex text-blue-600 hover:text-blue-700 dark:text-blue-400">
+                <Package className="h-3.5 w-3.5 mr-1.5" />评测交付
+              </Button>
+            </Link>
             {activeCount > 0 && <span className="text-xs text-muted-foreground hidden sm:inline">{activeCount} 个有效</span>}
             {expiredCount > 0 && (
               <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive" onClick={handleCleanupExpired} disabled={deleting}>

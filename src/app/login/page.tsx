@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { signIn } from 'next-auth/react';
 import {
-  Share2, Mail, Lock, Eye, EyeOff, Loader2, AlertCircle,
+  Share2, Mail, Lock, Eye, EyeOff, Loader2, AlertCircle, User,
 } from 'lucide-react';
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
@@ -15,9 +15,12 @@ import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/theme-toggle';
 import Link from 'next/link';
 
+type LoginMode = 'email' | 'account';
+
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('');
+  const [loginMode, setLoginMode] = useState<LoginMode>('account');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -27,8 +30,8 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
 
-    if (!email.trim()) {
-      setError('请输入邮箱');
+    if (!identifier.trim()) {
+      setError(loginMode === 'email' ? '请输入邮箱' : '请输入账号');
       return;
     }
     if (!password) {
@@ -39,13 +42,13 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const result = await signIn('credentials', {
-        email: email.trim(),
+        email: identifier.trim(),
         password,
         redirect: false,
       });
 
       if (result?.error) {
-        setError('邮箱或密码错误，请重试');
+        setError('邮箱/账号或密码错误，请重试');
         return;
       }
 
@@ -59,7 +62,6 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50/80 via-background to-muted/50 dark:from-emerald-950/20 dark:via-background dark:to-muted/20 flex flex-col">
-      {/* Header */}
       <header className="border-b bg-background/80 backdrop-blur-sm sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
@@ -72,12 +74,15 @@ export default function LoginPage() {
         </div>
       </header>
 
-      {/* Main */}
       <main className="flex-1 flex items-center justify-center p-4">
         <Card className="w-full max-w-md shadow-lg border-0">
           <CardHeader className="text-center space-y-2 pb-2">
             <div className="mx-auto w-14 h-14 rounded-full bg-emerald-100 dark:bg-emerald-950/50 flex items-center justify-center mb-2">
-              <Mail className="h-7 w-7 text-emerald-500" />
+              {loginMode === 'email' ? (
+                <Mail className="h-7 w-7 text-emerald-500" />
+              ) : (
+                <User className="h-7 w-7 text-emerald-500" />
+              )}
             </div>
             <CardTitle className="text-2xl font-bold">登录</CardTitle>
             <CardDescription>登录你的 FileShare 账号</CardDescription>
@@ -91,25 +96,56 @@ export default function LoginPage() {
                 </div>
               )}
 
-              {/* Email */}
+              <div className="flex rounded-lg border bg-muted/30 p-1">
+                <button
+                  type="button"
+                  className={`flex-1 h-9 rounded-md text-sm font-medium transition-colors ${
+                    loginMode === 'account'
+                      ? 'bg-background shadow-sm text-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  onClick={() => { setLoginMode('account'); setError(''); }}
+                  disabled={loading}
+                >
+                  账号登录
+                </button>
+                <button
+                  type="button"
+                  className={`flex-1 h-9 rounded-md text-sm font-medium transition-colors ${
+                    loginMode === 'email'
+                      ? 'bg-background shadow-sm text-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  onClick={() => { setLoginMode('email'); setError(''); }}
+                  disabled={loading}
+                >
+                  邮箱登录
+                </button>
+              </div>
+
               <div className="space-y-2">
-                <Label htmlFor="email" className="text-sm font-medium">邮箱</Label>
+                <Label htmlFor="identifier" className="text-sm font-medium">
+                  {loginMode === 'email' ? '邮箱' : '账号'}
+                </Label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  {loginMode === 'email' ? (
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  )}
                   <Input
-                    id="email"
-                    type="email"
-                    placeholder="请输入邮箱"
-                    value={email}
-                    onChange={(e) => { setEmail(e.target.value); setError(''); }}
+                    id="identifier"
+                    type={loginMode === 'email' ? 'email' : 'text'}
+                    placeholder={loginMode === 'email' ? '请输入邮箱' : '请输入账号，如 admin'}
+                    value={identifier}
+                    onChange={(e) => { setIdentifier(e.target.value); setError(''); }}
                     className="pl-9 h-11"
                     disabled={loading}
-                    autoComplete="email"
+                    autoComplete={loginMode === 'email' ? 'email' : 'username'}
                   />
                 </div>
               </div>
 
-              {/* Password */}
               <div className="space-y-2">
                 <Label htmlFor="password" className="text-sm font-medium">密码</Label>
                 <div className="relative">
@@ -134,7 +170,6 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              {/* Submit */}
               <Button
                 type="submit"
                 className="w-full h-11 bg-emerald-500 hover:bg-emerald-600 text-white font-medium"
@@ -151,7 +186,6 @@ export default function LoginPage() {
               </Button>
             </form>
 
-            {/* Links */}
             <div className="mt-6 flex items-center justify-between text-sm">
               <Link
                 href="/forgot-password"
@@ -170,7 +204,6 @@ export default function LoginPage() {
         </Card>
       </main>
 
-      {/* Footer */}
       <footer className="border-t bg-background/80 backdrop-blur-sm">
         <div className="max-w-4xl mx-auto px-4 h-12 flex items-center justify-center">
           <p className="text-sm text-muted-foreground">FileShare - 简单快捷的文件分享工具</p>
