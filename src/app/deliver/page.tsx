@@ -27,6 +27,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { uploadFile, generateRandomPassword, formatFileSize } from '@/lib/upload-client';
+import { buildDirectDownloadUrl } from '@/lib/share-links';
 
 const PRODUCT_TYPES = ['挂机', '卡牌', 'SLG', 'MMO', 'RPG', '休闲', '塔防', '模拟经营'] as const;
 const STORAGE_KEY = 'deliver-form-v3';
@@ -386,20 +387,25 @@ export default function DeliverPage() {
         setUploadProgress(Math.round((completedFiles / totalFiles) * 100));
         uploadedAttachments.push({
           fileName: att.file.name,
-          shareLink: `${window.location.origin}/share/${attResult.shareCode}`,
+          shareLink: buildDirectDownloadUrl(window.location.origin, attResult.shareCode),
         });
       }
 
-      const shareLink = `${window.location.origin}/share/${uploadResult.shareCode}`;
+      const shareCode = uploadResult.shareCode;
+      const downloadLink = buildDirectDownloadUrl(
+        window.location.origin,
+        shareCode,
+        enablePassword ? password.trim() : null,
+      );
       const message = buildPushMessage(
         form,
-        shareLink,
+        downloadLink,
         enablePassword ? password.trim() : null,
         uploadedAttachments,
         testAccounts,
       );
 
-      setResult({ shareCode: uploadResult.shareCode, shareLink, message });
+      setResult({ shareCode, shareLink: downloadLink, message });
 
       try {
         await pushToClipboard(message);
@@ -938,7 +944,7 @@ export default function DeliverPage() {
                   {copied ? '已复制' : autoPushed ? '重新复制' : '一键复制推送文案'}
                 </Button>
                 <Button variant="outline" className="h-10" onClick={handleCopyLink}>
-                  <Copy className="h-4 w-4 mr-2" />仅复制链接
+                  <Copy className="h-4 w-4 mr-2" />复制下载链接
                 </Button>
               </div>
               <div className="flex items-center gap-2 bg-muted/50 rounded-lg px-3 py-2">

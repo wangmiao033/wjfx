@@ -34,12 +34,14 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Collapsible,
   CollapsibleTrigger,
   CollapsibleContent,
 } from '@/components/ui/collapsible';
 import { useToast } from '@/hooks/use-toast';
+import { buildDirectDownloadUrl, isDirectDownloadFile } from '@/lib/share-links';
 
 // ==================== Types ====================
 interface ShareCodePageProps {
@@ -344,15 +346,26 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
     fetchFileInfo();
   }, [code]);
 
+  // APK 等大文件：验证通过后直接跳转浏览器下载
+  useEffect(() => {
+    if (!fileInfo || fileInfo.isExpired) return;
+    if (fileInfo.hasPassword && !passwordVerified) return;
+    if (!isDirectDownloadFile(fileInfo.fileName)) return;
+
+    const passwordParam = fileInfo.hasPassword && password
+      ? `&password=${encodeURIComponent(password)}`
+      : '';
+    window.location.replace(`/api/download?code=${code}${passwordParam}`);
+  }, [fileInfo, passwordVerified, password, code]);
+
   // 验证密码
   const handlePasswordVerify = useCallback(() => {
     if (!password.trim()) {
       toast({ title: '请输入提取密码', variant: 'destructive' });
       return;
     }
-    // 尝试下载一小部分来验证密码
-    // 简单方案：直接标记已验证，下载时服务端会真正验证
     setPasswordVerified(true);
+    // APK 等文件会在上方 effect 中自动跳转下载
   }, [password, toast]);
 
   // 高速下载：获取签名URL后直接让浏览器原生下载
@@ -396,8 +409,7 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
       }
 
       if (!downloadUrl) {
-        // 回退到代理URL（/api/download 会自动重定向到签名URL）
-        downloadUrl = `/api/download?code=${code}${passwordParam}`;
+        downloadUrl = buildDirectDownloadUrl(window.location.origin, code, fileInfo.hasPassword ? password : null);
         isLocal = true;
       }
 
@@ -491,6 +503,20 @@ export default function ShareCodePage({ params }: ShareCodePageProps) {
   }
 
   if (!fileInfo) return null;
+
+  // APK 等大文件：显示下载跳转中（实际由 effect 重定向到 /api/download）
+  if (!fileInfo.isExpired && isDirectDownloadFile(fileInfo.fileName) && passwordVerified) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50/80 via-background to-muted/50 dark:from-emerald-950/20 dark:via-background dark:to-muted/20">
+        <div className="flex flex-col items-center gap-4 text-center px-4">
+          <Loader2 className="h-10 w-10 animate-spin text-emerald-500" />
+          <p className="text-sm font-medium">正在开始下载</p>
+          <p className="text-xs text-muted-foreground break-all">{fileInfo.fileName}</p>
+          <p className="text-xs text-muted-foreground">浏览器将直接下载文件，如未开始请稍候…</p>
+        </div>
+      </div>
+    );
+  }
 
   // 密码验证页面（如果有密码且未验证）
   if (fileInfo.hasPassword && !passwordVerified) {
