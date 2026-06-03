@@ -7,7 +7,7 @@ import Link from 'next/link';
 import {
   Package, Upload, Copy, Check, Loader2, Send, User, LogOut,
   Share2, Lock, Eye, EyeOff, Wand2, FileUp, ArrowLeft, ClipboardCheck,
-  FileText, ImagePlus, X,
+  FileText, ImagePlus, X, KeyRound, Plus,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -29,7 +29,8 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { uploadFile, generateRandomPassword, formatFileSize } from '@/lib/upload-client';
 
 const PRODUCT_TYPES = ['挂机', '卡牌', 'SLG', 'MMO', 'RPG', '休闲', '塔防', '模拟经营'] as const;
-const STORAGE_KEY = 'deliver-form-v2';
+const STORAGE_KEY = 'deliver-form-v3';
+const MAX_TEST_ACCOUNTS = 5;
 const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
 
@@ -58,6 +59,43 @@ interface UploadedAttachment {
   shareLink: string;
 }
 
+interface TestAccount {
+  id: string;
+  account: string;
+  password: string;
+  server: string;
+}
+
+function createTestAccount(): TestAccount {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    account: '',
+    password: '',
+    server: '',
+  };
+}
+
+function appendTestAccounts(lines: string[], testAccounts: TestAccount[]) {
+  const valid = testAccounts.filter(a => a.account.trim());
+  if (valid.length === 0) return;
+
+  if (valid.length === 1) {
+    const a = valid[0];
+    lines.push(`测试账号：${a.account.trim()}`);
+    if (a.password.trim()) lines.push(`测试密码：${a.password.trim()}`);
+    if (a.server.trim()) lines.push(`测试区服：${a.server.trim()}`);
+    return;
+  }
+
+  lines.push('测试账号：');
+  valid.forEach((a, i) => {
+    let part = `${i + 1}. 账号：${a.account.trim()}`;
+    if (a.password.trim()) part += `  密码：${a.password.trim()}`;
+    if (a.server.trim()) part += `  区服：${a.server.trim()}`;
+    lines.push(part);
+  });
+}
+
 const defaultForm: DeliverForm = {
   productName: '',
   publisher: '',
@@ -74,6 +112,7 @@ function buildPushMessage(
   shareLink: string,
   password?: string | null,
   attachments: UploadedAttachment[] = [],
+  testAccounts: TestAccount[] = [],
 ): string {
   const types = form.productTypes.length > 0 ? form.productTypes.join(',') : '待定';
   let packageLine = shareLink;
@@ -90,6 +129,8 @@ function buildPushMessage(
     `产品类型：${types}`,
     `评测包：${packageLine}`,
   ];
+
+  appendTestAccounts(lines, testAccounts);
 
   if (form.privacyPolicyUrl.trim()) {
     lines.push(`隐私政策：${form.privacyPolicyUrl.trim()}`);
@@ -118,6 +159,12 @@ export default function DeliverPage() {
   const [form, setForm] = useState<DeliverForm>(defaultForm);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+  const [testAccounts, setTestAccounts] = useState<TestAccount[]>([createTestAccount()]);
+  const [showTestPasswords, setShowTestPasswords] = useState(false);
+  const formRef = useRef(form);
+  const testAccountsRef = useRef(testAccounts);
+  formRef.current = form;
+  testAccountsRef.current = testAccounts;
   const [expireDays, setExpireDays] = useState('30');
   const [enablePassword, setEnablePassword] = useState(true);
   const [password, setPassword] = useState('');
@@ -135,7 +182,9 @@ export default function DeliverPage() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved) as Partial<DeliverForm>;
+        const parsed = JSON.parse(saved) as Partial<DeliverForm> & {
+          testAccounts?: Pick<TestAccount, 'account' | 'password' | 'server'>[];
+        };
         setForm(prev => ({
           ...prev,
           ...parsed,
@@ -143,6 +192,14 @@ export default function DeliverPage() {
           privacyPolicyUrl: parsed.privacyPolicyUrl || DEFAULT_PRIVACY_URL,
           userAgreementUrl: parsed.userAgreementUrl || DEFAULT_AGREEMENT_URL,
         }));
+        if (parsed.testAccounts?.length) {
+          setTestAccounts(parsed.testAccounts.map(a => ({
+            ...createTestAccount(),
+            account: a.account || '',
+            password: a.password || '',
+            server: a.server || '',
+          })));
+        }
       }
     } catch { /* ignore */ }
   }, []);
@@ -155,7 +212,7 @@ export default function DeliverPage() {
     };
   }, []);
 
-  const saveFormDefaults = useCallback((data: DeliverForm) => {
+  const saveFormDefaults = useCallback((data: DeliverForm, accounts: TestAccount[]) => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         productName: data.productName,
@@ -166,14 +223,19 @@ export default function DeliverPage() {
         productTypes: data.productTypes,
         privacyPolicyUrl: data.privacyPolicyUrl,
         userAgreementUrl: data.userAgreementUrl,
+        testAccounts: accounts.map(({ account, password, server }) => ({ account, password, server })),
       }));
     } catch { /* ignore */ }
   }, []);
 
+  const persistTestAccounts = useCallback((accounts: TestAccount[]) => {
+    saveFormDefaults(formRef.current, accounts);
+  }, [saveFormDefaults]);
+
   const updateForm = (patch: Partial<DeliverForm>) => {
     setForm(prev => {
       const next = { ...prev, ...patch };
-      saveFormDefaults(next);
+      saveFormDefaults(next, testAccountsRef.current);
       return next;
     });
   };
@@ -184,7 +246,7 @@ export default function DeliverPage() {
         ? prev.productTypes.filter(t => t !== type)
         : [...prev.productTypes, type];
       const next = { ...prev, productTypes: types };
-      saveFormDefaults(next);
+      saveFormDefaults(next, testAccountsRef.current);
       return next;
     });
   };
@@ -226,6 +288,42 @@ export default function DeliverPage() {
       const item = prev.find(a => a.id === id);
       if (item) URL.revokeObjectURL(item.preview);
       return prev.filter(a => a.id !== id);
+    });
+    setResult(null);
+  };
+
+  const updateTestAccount = (id: string, patch: Partial<Omit<TestAccount, 'id'>>) => {
+    setTestAccounts(prev => {
+      const next = prev.map(a => a.id === id ? { ...a, ...patch } : a);
+      persistTestAccounts(next);
+      return next;
+    });
+    setResult(null);
+  };
+
+  const addTestAccount = () => {
+    if (testAccounts.length >= MAX_TEST_ACCOUNTS) {
+      toast({ title: '测试账号已达上限', description: `最多 ${MAX_TEST_ACCOUNTS} 个`, variant: 'destructive' });
+      return;
+    }
+    setTestAccounts(prev => {
+      const next = [...prev, createTestAccount()];
+      persistTestAccounts(next);
+      return next;
+    });
+    setResult(null);
+  };
+
+  const removeTestAccount = (id: string) => {
+    setTestAccounts(prev => {
+      if (prev.length <= 1) {
+        const empty = { ...prev[0], account: '', password: '', server: '' };
+        persistTestAccounts([empty]);
+        return [empty];
+      }
+      const next = prev.filter(a => a.id !== id);
+      persistTestAccounts(next);
+      return next;
     });
     setResult(null);
   };
@@ -298,6 +396,7 @@ export default function DeliverPage() {
         shareLink,
         enablePassword ? password.trim() : null,
         uploadedAttachments,
+        testAccounts,
       );
 
       setResult({ shareCode: uploadResult.shareCode, shareLink, message });
@@ -601,6 +700,95 @@ export default function DeliverPage() {
                 ))}
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        {/* 测试账号 */}
+        <Card className="border-0 shadow-sm">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <KeyRound className="h-4 w-4 text-blue-500" />
+                  测试账号
+                </CardTitle>
+                <CardDescription className="mt-1">APK 评测用登录账号，会写入推送文案（可选）</CardDescription>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs flex-shrink-0"
+                onClick={addTestAccount}
+                disabled={uploading || testAccounts.length >= MAX_TEST_ACCOUNTS}
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" />添加账号
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {testAccounts.map((acc, index) => (
+              <div key={acc.id} className="rounded-lg border bg-muted/20 p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {testAccounts.length > 1 ? `账号 ${index + 1}` : '测试账号'}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {index === 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowTestPasswords(!showTestPasswords)}
+                        className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                        disabled={uploading}
+                      >
+                        {showTestPasswords ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                        {showTestPasswords ? '隐藏密码' : '显示密码'}
+                      </button>
+                    )}
+                    {testAccounts.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeTestAccount(acc.id)}
+                        className="text-muted-foreground hover:text-destructive"
+                        disabled={uploading}
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">登录账号</Label>
+                    <Input
+                      placeholder="如：test001"
+                      value={acc.account}
+                      onChange={e => updateTestAccount(acc.id, { account: e.target.value })}
+                      disabled={uploading}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">登录密码</Label>
+                    <Input
+                      type={showTestPasswords ? 'text' : 'password'}
+                      placeholder="如：123456"
+                      value={acc.password}
+                      onChange={e => updateTestAccount(acc.id, { password: e.target.value })}
+                      disabled={uploading}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">区服（可选）</Label>
+                    <Input
+                      placeholder="如：1区 / S1"
+                      value={acc.server}
+                      onChange={e => updateTestAccount(acc.id, { server: e.target.value })}
+                      disabled={uploading}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
           </CardContent>
         </Card>
 
