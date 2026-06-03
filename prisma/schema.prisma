@@ -12,12 +12,44 @@ datasource db {
 }
 
 model User {
-  id        String       @id @default(cuid())
-  email     String       @unique
-  name      String?
-  password  String
-  createdAt DateTime     @default(now())
-  files     SharedFile[]
+  id             String          @id @default(cuid())
+  email          String          @unique
+  name           String?
+  password       String
+  createdAt      DateTime        @default(now())
+  files          SharedFile[]
+  deliverRecords DeliverRecord[]
+}
+
+model DeliverRecord {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  productName      String
+  publisher        String   @default("")
+  developer        String   @default("")
+  pastProducts     String   @default("")
+  productNode      String   @default("")
+  productTypes     String   @default("[]")
+  privacyPolicyUrl String   @default("")
+  userAgreementUrl String   @default("")
+  testAccounts     String   @default("[]")
+
+  status           String   @default("draft")
+
+  shareCode        String?
+  downloadLink     String?
+  extractPassword  String?
+  pushMessage      String?
+  packageFileName  String?
+  packageFileSize  Int?
+  attachments      String   @default("[]")
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId, updatedAt])
 }
 
 model SharedFile {

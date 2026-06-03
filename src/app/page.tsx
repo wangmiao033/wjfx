@@ -485,6 +485,10 @@ function UploadPage() {
                   <p className="text-xs text-muted-foreground truncate">{userEmail}</p>
                 </div>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem asChild className="cursor-pointer">
+                  <Link href="/profile"><User className="h-4 w-4 mr-2" />个人中心</Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => signOut({ redirect: false }).then(() => router.push('/login'))} className="text-destructive focus:text-destructive cursor-pointer">
                   <LogOut className="h-4 w-4 mr-2" />退出登录
                 </DropdownMenuItem>

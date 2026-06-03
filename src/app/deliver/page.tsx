@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSession, signOut } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   Package, Upload, Copy, Check, Loader2, Send, User, LogOut,
   Share2, Lock, Eye, EyeOff, Wand2, FileUp, ArrowLeft, ClipboardCheck,
-  FileText, ImagePlus, X, KeyRound, Plus, History, Trash2,
+  FileText, ImagePlus, X, KeyRound, Plus, History, Trash2, Save, Cloud,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -28,39 +28,24 @@ import { useToast } from '@/hooks/use-toast';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { uploadFile, generateRandomPassword, formatFileSize } from '@/lib/upload-client';
 import { buildDirectDownloadUrl } from '@/lib/share-links';
+import {
+  PRODUCT_TYPES, DEFAULT_PRIVACY_URL, DEFAULT_AGREEMENT_URL,
+  MAX_TEST_ACCOUNTS, MAX_ATTACHMENT_SIZE, MAX_ATTACHMENTS,
+  defaultDeliverForm, createTestAccount, formatSavedTime, buildPushMessage,
+  recordToForm, recordToTestAccounts,
+  type DeliverForm, type TestAccount, type UploadedAttachment, type DeliverRecordDTO,
+} from '@/lib/deliver-types';
+import { fetchDeliverRecord, saveDeliverRecord } from '@/lib/deliver-api';
 
-const PRODUCT_TYPES = ['挂机', '卡牌', 'SLG', 'MMO', 'RPG', '休闲', '塔防', '模拟经营'] as const;
 const STORAGE_KEY = 'deliver-form-v3';
 const RESULT_STORAGE_KEY = 'deliver-last-result-v1';
 const HISTORY_STORAGE_KEY = 'deliver-history-v1';
 const MAX_HISTORY = 20;
-const MAX_TEST_ACCOUNTS = 5;
-const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024;
-const MAX_ATTACHMENTS = 10;
-
-const DEFAULT_PRIVACY_URL = 'https://privacy.hnchpower.cn/document-policy.html?id=UU7zYCRl';
-const DEFAULT_AGREEMENT_URL = 'http://fghx.ibox.com.cn/sdk/Privacy_xd.html';
-
-interface DeliverForm {
-  productName: string;
-  publisher: string;
-  developer: string;
-  pastProducts: string;
-  productNode: string;
-  productTypes: string[];
-  privacyPolicyUrl: string;
-  userAgreementUrl: string;
-}
 
 interface AttachmentItem {
   id: string;
   file: File;
   preview: string;
-}
-
-interface UploadedAttachment {
-  fileName: string;
-  shareLink: string;
 }
 
 interface SavedDeliverResult {
@@ -92,114 +77,23 @@ function saveDeliverResult(entry: SavedDeliverResult) {
   } catch { /* ignore */ }
 }
 
-function formatSavedTime(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-interface TestAccount {
-  id: string;
-  account: string;
-  password: string;
-  server: string;
-}
-
-function createTestAccount(): TestAccount {
-  return {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    account: '',
-    password: '',
-    server: '',
-  };
-}
-
-function appendTestAccounts(lines: string[], testAccounts: TestAccount[]) {
-  const valid = testAccounts.filter(a => a.account.trim());
-  if (valid.length === 0) return;
-
-  if (valid.length === 1) {
-    const a = valid[0];
-    lines.push(`测试账号：${a.account.trim()}`);
-    if (a.password.trim()) lines.push(`测试密码：${a.password.trim()}`);
-    if (a.server.trim()) lines.push(`测试区服：${a.server.trim()}`);
-    return;
-  }
-
-  lines.push('测试账号：');
-  valid.forEach((a, i) => {
-    let part = `${i + 1}. 账号：${a.account.trim()}`;
-    if (a.password.trim()) part += `  密码：${a.password.trim()}`;
-    if (a.server.trim()) part += `  区服：${a.server.trim()}`;
-    lines.push(part);
-  });
-}
-
-const defaultForm: DeliverForm = {
-  productName: '',
-  publisher: '',
-  developer: '',
-  pastProducts: '',
-  productNode: '',
-  productTypes: [],
-  privacyPolicyUrl: DEFAULT_PRIVACY_URL,
-  userAgreementUrl: DEFAULT_AGREEMENT_URL,
-};
-
-function buildPushMessage(
-  form: DeliverForm,
-  shareLink: string,
-  password?: string | null,
-  attachments: UploadedAttachment[] = [],
-  testAccounts: TestAccount[] = [],
-): string {
-  const types = form.productTypes.length > 0 ? form.productTypes.join(',') : '待定';
-  let packageLine = shareLink;
-  if (password) {
-    packageLine += `\n提取密码：${password}`;
-  }
-
-  const lines = [
-    `产品名称：${form.productName || '待定'}`,
-    `发行商：${form.publisher || '待定'}`,
-    `产品研发：${form.developer || '待定'}`,
-    `研发过往产品：${form.pastProducts || '待定'}`,
-    `产品节点：${form.productNode || '待定'}`,
-    `产品类型：${types}`,
-    `评测包：${packageLine}`,
-  ];
-
-  appendTestAccounts(lines, testAccounts);
-
-  if (form.privacyPolicyUrl.trim()) {
-    lines.push(`隐私政策：${form.privacyPolicyUrl.trim()}`);
-  }
-  if (form.userAgreementUrl.trim()) {
-    lines.push(`用户协议：${form.userAgreementUrl.trim()}`);
-  }
-  if (attachments.length > 0) {
-    lines.push('附件：');
-    for (const att of attachments) {
-      lines.push(`${att.fileName}：${att.shareLink}`);
-    }
-  }
-
-  return lines.join('\n');
-}
-
-export default function DeliverPage() {
+function DeliverPageContent() {
   const { data: session, status } = useSession();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const attachmentsRef = useRef<AttachmentItem[]>([]);
 
-  const [form, setForm] = useState<DeliverForm>(defaultForm);
+  const [form, setForm] = useState<DeliverForm>(defaultDeliverForm);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [testAccounts, setTestAccounts] = useState<TestAccount[]>([createTestAccount()]);
   const [showTestPasswords, setShowTestPasswords] = useState(false);
+  const [recordId, setRecordId] = useState<string | null>(null);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [cloudSynced, setCloudSynced] = useState(false);
   const formRef = useRef(form);
   const testAccountsRef = useRef(testAccounts);
   formRef.current = form;
@@ -217,9 +111,106 @@ export default function DeliverPage() {
   const [copied, setCopied] = useState(false);
   const [autoPushed, setAutoPushed] = useState(false);
   const resultRef = useRef<HTMLDivElement>(null);
+  const cloudId = searchParams.get('id');
 
-  // 从 localStorage 恢复表单默认值
+  const saveFormDefaults = useCallback((data: DeliverForm, accounts: TestAccount[]) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        productName: data.productName,
+        publisher: data.publisher,
+        developer: data.developer,
+        pastProducts: data.pastProducts,
+        productNode: data.productNode,
+        productTypes: data.productTypes,
+        privacyPolicyUrl: data.privacyPolicyUrl,
+        userAgreementUrl: data.userAgreementUrl,
+        testAccounts: accounts.map(({ account, password, server }) => ({ account, password, server })),
+      }));
+    } catch { /* ignore */ }
+  }, []);
+
+  const applyCloudRecord = useCallback((record: DeliverRecordDTO) => {
+    const nextForm = recordToForm(record);
+    const nextAccounts = recordToTestAccounts(record);
+    setForm(nextForm);
+    setTestAccounts(nextAccounts);
+    setRecordId(record.id);
+    setCloudSynced(true);
+    saveFormDefaults(nextForm, nextAccounts);
+    if (record.shareCode && record.pushMessage) {
+      setResult({
+        shareCode: record.shareCode,
+        shareLink: record.downloadLink || '',
+        message: record.pushMessage,
+        fileName: record.packageFileName || undefined,
+        productName: record.productName,
+        savedAt: record.updatedAt,
+      });
+      setRestoredFromStorage(true);
+      if (record.extractPassword) {
+        setEnablePassword(true);
+        setPassword(record.extractPassword);
+      }
+    }
+  }, [saveFormDefaults]);
+
+  const saveToCloud = useCallback(async (opts: {
+    status: 'draft' | 'completed';
+    shareCode?: string;
+    downloadLink?: string;
+    extractPassword?: string | null;
+    pushMessage?: string;
+    packageFileName?: string;
+    packageFileSize?: number;
+    attachments?: UploadedAttachment[];
+  }) => {
+    if (!form.productName.trim()) {
+      toast({ title: '请填写产品名称', variant: 'destructive' });
+      return null;
+    }
+    setSavingDraft(true);
+    try {
+      const record = await saveDeliverRecord({
+        id: recordId,
+        status: opts.status,
+        form,
+        testAccounts: testAccounts.map(({ account, password, server }) => ({ account, password, server })),
+        shareCode: opts.shareCode ?? result?.shareCode ?? null,
+        downloadLink: opts.downloadLink ?? result?.shareLink ?? null,
+        extractPassword: opts.extractPassword ?? (enablePassword ? password.trim() : null),
+        pushMessage: opts.pushMessage ?? result?.message ?? null,
+        packageFileName: opts.packageFileName ?? result?.fileName ?? null,
+        packageFileSize: opts.packageFileSize ?? null,
+        attachments: opts.attachments,
+      });
+      setRecordId(record.id);
+      setCloudSynced(true);
+      if (!cloudId) {
+        router.replace(`/deliver?id=${record.id}`, { scroll: false });
+      }
+      return record;
+    } catch (err) {
+      toast({
+        title: '云端保存失败',
+        description: err instanceof Error ? err.message : '未知错误',
+        variant: 'destructive',
+      });
+      return null;
+    } finally {
+      setSavingDraft(false);
+    }
+  }, [form, testAccounts, recordId, result, enablePassword, password, cloudId, router, toast]);
+
+  const handleSaveDraft = async () => {
+    const record = await saveToCloud({ status: 'draft' });
+    if (record) {
+      toast({ title: '已保存到个人中心', description: '下次可在个人中心继续编辑' });
+    }
+  };
+
+  // 从 localStorage 恢复表单默认值（无云端 id 时）
   useEffect(() => {
+    if (cloudId) return;
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
@@ -261,7 +252,30 @@ export default function DeliverPage() {
 
       setHistory(loadDeliverHistory());
     } catch { /* ignore */ }
-  }, []);
+  }, [cloudId]);
+
+  useEffect(() => {
+    if (status !== 'authenticated' || !cloudId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const record = await fetchDeliverRecord(cloudId);
+        if (!cancelled) {
+          applyCloudRecord(record);
+          toast({ title: '已从个人中心恢复', description: record.productName || '草稿' });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          toast({
+            title: '加载记录失败',
+            description: err instanceof Error ? err.message : '未知错误',
+            variant: 'destructive',
+          });
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [status, cloudId, applyCloudRecord, toast]);
 
   attachmentsRef.current = attachments;
 
@@ -269,22 +283,6 @@ export default function DeliverPage() {
     return () => {
       attachmentsRef.current.forEach(a => URL.revokeObjectURL(a.preview));
     };
-  }, []);
-
-  const saveFormDefaults = useCallback((data: DeliverForm, accounts: TestAccount[]) => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        productName: data.productName,
-        publisher: data.publisher,
-        developer: data.developer,
-        pastProducts: data.pastProducts,
-        productNode: data.productNode,
-        productTypes: data.productTypes,
-        privacyPolicyUrl: data.privacyPolicyUrl,
-        userAgreementUrl: data.userAgreementUrl,
-        testAccounts: accounts.map(({ account, password, server }) => ({ account, password, server })),
-      }));
-    } catch { /* ignore */ }
   }, []);
 
   const persistTestAccounts = useCallback((accounts: TestAccount[]) => {
@@ -477,10 +475,21 @@ export default function DeliverPage() {
       saveDeliverResult(savedEntry);
       setHistory(loadDeliverHistory());
 
+      const cloudRecord = await saveToCloud({
+        status: 'completed',
+        shareCode,
+        downloadLink,
+        extractPassword: enablePassword ? password.trim() : null,
+        pushMessage: message,
+        packageFileName: selectedFile.name,
+        packageFileSize: selectedFile.size,
+        attachments: uploadedAttachments,
+      });
+
       try {
         await pushToClipboard(message);
         toast({
-          title: '上传成功，已推送到剪贴板',
+          title: cloudRecord ? '上传成功，已推送到剪贴板并保存到个人中心' : '上传成功，已推送到剪贴板',
           description: '切换到微信，直接粘贴发送给客户即可',
         });
       } catch {
@@ -636,6 +645,10 @@ export default function DeliverPage() {
                   <p className="text-xs text-muted-foreground truncate">{userEmail}</p>
                 </div>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem asChild className="cursor-pointer">
+                  <Link href="/profile"><User className="h-4 w-4 mr-2" />个人中心</Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => signOut({ redirect: false }).then(() => router.push('/login'))} className="text-destructive focus:text-destructive cursor-pointer">
                   <LogOut className="h-4 w-4 mr-2" />退出登录
                 </DropdownMenuItem>
@@ -649,11 +662,33 @@ export default function DeliverPage() {
         {/* 产品信息表单 */}
         <Card className="border-0 shadow-sm">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <ClipboardCheck className="h-4 w-4 text-blue-500" />
-              产品信息
-            </CardTitle>
-            <CardDescription>填写客户要求的产品资料，表单会自动记住常用信息</CardDescription>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <ClipboardCheck className="h-4 w-4 text-blue-500" />
+                  产品信息
+                </CardTitle>
+                <CardDescription className="mt-1">填写游戏资料，可随时保存到个人中心</CardDescription>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {cloudSynced && (
+                  <Badge variant="outline" className="text-[10px] gap-1 text-emerald-600 border-emerald-300">
+                    <Cloud className="h-3 w-3" />已同步云端
+                  </Badge>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  disabled={savingDraft || uploading}
+                  onClick={handleSaveDraft}
+                >
+                  {savingDraft ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}
+                  保存到个人中心
+                </Button>
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1077,17 +1112,27 @@ export default function DeliverPage() {
                     <History className="h-4 w-4 text-muted-foreground" />
                     历史推送记录
                   </CardTitle>
-                  <CardDescription className="mt-1">保存在本浏览器，刷新不丢失（最近 {MAX_HISTORY} 条）</CardDescription>
+                  <CardDescription className="mt-1">
+                    本机缓存（最近 {MAX_HISTORY} 条）· 完整记录请前往
+                    <Link href="/profile" className="text-blue-500 hover:underline mx-1">个人中心</Link>
+                  </CardDescription>
                 </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 text-xs text-muted-foreground hover:text-destructive"
-                  onClick={clearDeliverHistory}
-                >
-                  <Trash2 className="h-3.5 w-3.5 mr-1" />清空
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Link href="/profile">
+                    <Button type="button" variant="outline" size="sm" className="h-8 text-xs">
+                      <User className="h-3.5 w-3.5 mr-1" />个人中心
+                    </Button>
+                  </Link>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 text-xs text-muted-foreground hover:text-destructive"
+                    onClick={clearDeliverHistory}
+                  >
+                    <Trash2 className="h-3.5 w-3.5 mr-1" />清空
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="space-y-2">
@@ -1113,8 +1158,20 @@ export default function DeliverPage() {
       </main>
 
       <footer className="border-t bg-background/50 py-3 text-center text-xs text-muted-foreground mt-auto">
-        评测包交付 · 上传即推送至剪贴板
+        评测包交付 · 资料云端保存 · 上传即推送至剪贴板
       </footer>
     </div>
+  );
+}
+
+export default function DeliverPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    }>
+      <DeliverPageContent />
+    </Suspense>
   );
 }
