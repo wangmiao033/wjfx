@@ -1,0 +1,25 @@
+---
+description: 完成功能改动后自动 commit 并 push 到 GitHub，无需用户再次确认
+alwaysApply: true
+---
+
+# 自动推送到 GitHub
+
+本仓库远程：`git@github.com:wangmiao033/wjfx.git`，默认分支 `main`。
+
+## 何时推送
+
+完成一项功能开发、bug 修复或用户请求的代码改动后，**主动** commit 并 push，**不要等用户再说「推送」**。
+
+## 推送流程
+
+1. 确认不提交敏感文件（`.env`、`prisma/dev.db`、`uploads/` 等）
+2. 编写简洁 commit message（英文，说明 why）
+3. `git add` 相关文件 → `git commit` → `git push origin main`
+4. 在回复中告知用户 commit hash 和已推送内容
+
+## 例外
+
+- 用户明确说「先不要提交/推送」
+- 改动仅为本地试验、未完成或用户正在 review
+- 仅回答问题、无代码变更
