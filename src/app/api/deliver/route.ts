@@ -56,7 +56,11 @@ export async function GET() {
       return NextResponse.json({ error: '请先登录' }, { status: 401 });
     }
 
-    const userId = (session.user as { id: string }).id;
+    const userId = (session.user as { id?: string }).id;
+    if (!userId) {
+      return NextResponse.json({ error: '会话无效，请重新登录' }, { status: 401 });
+    }
+
     const records = await db.deliverRecord.findMany({
       where: { userId },
       orderBy: { updatedAt: 'desc' },
@@ -67,6 +71,10 @@ export async function GET() {
     });
   } catch (error) {
     console.error('[deliver GET]', error);
+    const msg = error instanceof Error ? error.message : '';
+    if (msg.includes('DeliverRecord') && (msg.includes('does not exist') || msg.includes('不存在'))) {
+      return NextResponse.json({ error: '数据库表未同步，请等待部署完成或联系管理员' }, { status: 503 });
+    }
     return NextResponse.json({ error: '加载失败' }, { status: 500 });
   }
 }
@@ -78,7 +86,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '请先登录' }, { status: 401 });
     }
 
-    const userId = (session.user as { id: string }).id;
+    const userId = (session.user as { id?: string }).id;
+    if (!userId) {
+      return NextResponse.json({ error: '会话无效，请重新登录' }, { status: 401 });
+    }
+
     const body = await request.json();
     const { id, status, form, testAccounts, shareCode, downloadLink, extractPassword, pushMessage, packageFileName, packageFileSize, attachments } = body;
 

@@ -59,8 +59,12 @@ export async function GET(
       return NextResponse.json({ error: '请先登录' }, { status: 401 });
     }
 
+    const userId = (session.user as { id?: string }).id;
+    if (!userId) {
+      return NextResponse.json({ error: '会话无效，请重新登录' }, { status: 401 });
+    }
+
     const { id } = await params;
-    const userId = (session.user as { id: string }).id;
 
     const record = await db.deliverRecord.findFirst({ where: { id, userId } });
     if (!record) {
@@ -85,7 +89,10 @@ export async function DELETE(
     }
 
     const { id } = await params;
-    const userId = (session.user as { id: string }).id;
+    const userId = (session.user as { id?: string }).id;
+    if (!userId) {
+      return NextResponse.json({ error: '会话无效，请重新登录' }, { status: 401 });
+    }
 
     const existing = await db.deliverRecord.findFirst({ where: { id, userId } });
     if (!existing) {

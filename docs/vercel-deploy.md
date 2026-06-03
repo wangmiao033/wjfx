@@ -47,13 +47,17 @@
 
 ### 3.2 初始化数据库表结构
 
-首次部署后，在本地（已配置 `.env` 指向 Supabase）执行：
+部署时 build 脚本会自动执行 `prisma db push` 同步表结构（需配置 `DATABASE_URL` 与 `DIRECT_URL`）。
+
+若个人中心报「加载失败」，可在 Supabase → SQL Editor 中执行：
+
+`prisma/sql/add_deliver_record.sql`
+
+或本地手动同步：
 
 ```bash
 npx prisma db push
 ```
-
-或在 Supabase SQL Editor 中手动执行 `prisma db push` 生成的 SQL。
 
 ### 3.3 创建 admin 账号
 
