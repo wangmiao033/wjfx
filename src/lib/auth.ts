@@ -21,7 +21,9 @@ export const authOptions: NextAuthOptions = {
 
         const user = isEmail
           ? await db.user.findUnique({ where: { email: identifier } })
-          : await db.user.findFirst({ where: { name: identifier } });
+          : await db.user.findFirst({
+              where: { name: { equals: identifier, mode: 'insensitive' } },
+            });
 
         if (!user) {
           throw new Error('邮箱/账号或密码错误');

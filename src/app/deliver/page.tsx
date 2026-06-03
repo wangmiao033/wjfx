@@ -7,6 +7,7 @@ import Link from 'next/link';
 import {
   Package, Upload, Copy, Check, Loader2, Send, User, LogOut,
   Share2, Lock, Eye, EyeOff, Wand2, FileUp, ArrowLeft, ClipboardCheck,
+  FileText, ImagePlus, X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -28,7 +29,12 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { uploadFile, generateRandomPassword, formatFileSize } from '@/lib/upload-client';
 
 const PRODUCT_TYPES = ['挂机', '卡牌', 'SLG', 'MMO', 'RPG', '休闲', '塔防', '模拟经营'] as const;
-const STORAGE_KEY = 'deliver-form-v1';
+const STORAGE_KEY = 'deliver-form-v2';
+const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024;
+const MAX_ATTACHMENTS = 10;
+
+const DEFAULT_PRIVACY_URL = 'https://privacy.hnchpower.cn/document-policy.html?id=UU7zYCRl';
+const DEFAULT_AGREEMENT_URL = 'http://fghx.ibox.com.cn/sdk/Privacy_xd.html';
 
 interface DeliverForm {
   productName: string;
@@ -37,6 +43,19 @@ interface DeliverForm {
   pastProducts: string;
   productNode: string;
   productTypes: string[];
+  privacyPolicyUrl: string;
+  userAgreementUrl: string;
+}
+
+interface AttachmentItem {
+  id: string;
+  file: File;
+  preview: string;
+}
+
+interface UploadedAttachment {
+  fileName: string;
+  shareLink: string;
 }
 
 const defaultForm: DeliverForm = {
@@ -46,16 +65,23 @@ const defaultForm: DeliverForm = {
   pastProducts: '',
   productNode: '',
   productTypes: [],
+  privacyPolicyUrl: DEFAULT_PRIVACY_URL,
+  userAgreementUrl: DEFAULT_AGREEMENT_URL,
 };
 
-function buildPushMessage(form: DeliverForm, shareLink: string, password?: string | null): string {
+function buildPushMessage(
+  form: DeliverForm,
+  shareLink: string,
+  password?: string | null,
+  attachments: UploadedAttachment[] = [],
+): string {
   const types = form.productTypes.length > 0 ? form.productTypes.join(',') : '待定';
   let packageLine = shareLink;
   if (password) {
     packageLine += `\n提取密码：${password}`;
   }
 
-  return [
+  const lines = [
     `产品名称：${form.productName || '待定'}`,
     `发行商：${form.publisher || '待定'}`,
     `产品研发：${form.developer || '待定'}`,
@@ -63,7 +89,22 @@ function buildPushMessage(form: DeliverForm, shareLink: string, password?: strin
     `产品节点：${form.productNode || '待定'}`,
     `产品类型：${types}`,
     `评测包：${packageLine}`,
-  ].join('\n');
+  ];
+
+  if (form.privacyPolicyUrl.trim()) {
+    lines.push(`隐私政策：${form.privacyPolicyUrl.trim()}`);
+  }
+  if (form.userAgreementUrl.trim()) {
+    lines.push(`用户协议：${form.userAgreementUrl.trim()}`);
+  }
+  if (attachments.length > 0) {
+    lines.push('附件：');
+    for (const att of attachments) {
+      lines.push(`${att.fileName}：${att.shareLink}`);
+    }
+  }
+
+  return lines.join('\n');
 }
 
 export default function DeliverPage() {
@@ -71,9 +112,12 @@ export default function DeliverPage() {
   const router = useRouter();
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const attachmentsRef = useRef<AttachmentItem[]>([]);
 
   const [form, setForm] = useState<DeliverForm>(defaultForm);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [expireDays, setExpireDays] = useState('30');
   const [enablePassword, setEnablePassword] = useState(true);
   const [password, setPassword] = useState('');
@@ -92,9 +136,23 @@ export default function DeliverPage() {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as Partial<DeliverForm>;
-        setForm(prev => ({ ...prev, ...parsed, productTypes: parsed.productTypes || [] }));
+        setForm(prev => ({
+          ...prev,
+          ...parsed,
+          productTypes: parsed.productTypes || [],
+          privacyPolicyUrl: parsed.privacyPolicyUrl || DEFAULT_PRIVACY_URL,
+          userAgreementUrl: parsed.userAgreementUrl || DEFAULT_AGREEMENT_URL,
+        }));
       }
     } catch { /* ignore */ }
+  }, []);
+
+  attachmentsRef.current = attachments;
+
+  useEffect(() => {
+    return () => {
+      attachmentsRef.current.forEach(a => URL.revokeObjectURL(a.preview));
+    };
   }, []);
 
   const saveFormDefaults = useCallback((data: DeliverForm) => {
@@ -106,6 +164,8 @@ export default function DeliverPage() {
         pastProducts: data.pastProducts,
         productNode: data.productNode,
         productTypes: data.productTypes,
+        privacyPolicyUrl: data.privacyPolicyUrl,
+        userAgreementUrl: data.userAgreementUrl,
       }));
     } catch { /* ignore */ }
   }, []);
@@ -127,6 +187,47 @@ export default function DeliverPage() {
       saveFormDefaults(next);
       return next;
     });
+  };
+
+  const handleAddAttachments = (fileList: FileList | File[]) => {
+    const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
+    if (files.length === 0) {
+      toast({ title: '请选择图片文件', description: '支持 JPG、PNG、GIF、WebP', variant: 'destructive' });
+      return;
+    }
+
+    const remaining = MAX_ATTACHMENTS - attachments.length;
+    if (remaining <= 0) {
+      toast({ title: '附件数量已达上限', description: `最多 ${MAX_ATTACHMENTS} 张`, variant: 'destructive' });
+      return;
+    }
+
+    const toAdd: AttachmentItem[] = [];
+    for (const file of files.slice(0, remaining)) {
+      if (file.size > MAX_ATTACHMENT_SIZE) {
+        toast({ title: `${file.name} 超过 20MB`, variant: 'destructive' });
+        continue;
+      }
+      toAdd.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        file,
+        preview: URL.createObjectURL(file),
+      });
+    }
+
+    if (toAdd.length > 0) {
+      setAttachments(prev => [...prev, ...toAdd]);
+      setResult(null);
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments(prev => {
+      const item = prev.find(a => a.id === id);
+      if (item) URL.revokeObjectURL(item.preview);
+      return prev.filter(a => a.id !== id);
+    });
+    setResult(null);
   };
 
   const pushToClipboard = useCallback(async (text: string) => {
@@ -156,17 +257,47 @@ export default function DeliverPage() {
     setAutoPushed(false);
 
     try {
-      const uploadResult = await uploadFile(selectedFile, {
+      const totalFiles = 1 + attachments.length;
+      let completedFiles = 0;
+
+      const trackProgress = (fileProgress: number) => {
+        const overall = ((completedFiles + fileProgress / 100) / totalFiles) * 100;
+        setUploadProgress(Math.round(overall));
+      };
+
+      const uploadOpts = {
         expireDays,
         password: enablePassword ? password.trim() : null,
-        onProgress: setUploadProgress,
+      };
+
+      const uploadResult = await uploadFile(selectedFile, {
+        ...uploadOpts,
+        onProgress: trackProgress,
       });
+      completedFiles++;
+      setUploadProgress(Math.round((completedFiles / totalFiles) * 100));
+
+      const uploadedAttachments: UploadedAttachment[] = [];
+      for (const att of attachments) {
+        const attResult = await uploadFile(att.file, {
+          expireDays,
+          password: null,
+          onProgress: trackProgress,
+        });
+        completedFiles++;
+        setUploadProgress(Math.round((completedFiles / totalFiles) * 100));
+        uploadedAttachments.push({
+          fileName: att.file.name,
+          shareLink: `${window.location.origin}/share/${attResult.shareCode}`,
+        });
+      }
 
       const shareLink = `${window.location.origin}/share/${uploadResult.shareCode}`;
       const message = buildPushMessage(
         form,
         shareLink,
         enablePassword ? password.trim() : null,
+        uploadedAttachments,
       );
 
       setResult({ shareCode: uploadResult.shareCode, shareLink, message });
@@ -373,6 +504,106 @@ export default function DeliverPage() {
           </CardContent>
         </Card>
 
+        {/* 合规链接 */}
+        <Card className="border-0 shadow-sm">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <FileText className="h-4 w-4 text-blue-500" />
+              合规链接
+            </CardTitle>
+            <CardDescription>隐私政策和用户协议链接，会一并写入推送文案</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="privacyPolicyUrl" className="text-xs">隐私政策</Label>
+              <Input
+                id="privacyPolicyUrl"
+                type="url"
+                placeholder="https://..."
+                value={form.privacyPolicyUrl}
+                onChange={e => updateForm({ privacyPolicyUrl: e.target.value })}
+                disabled={uploading}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="userAgreementUrl" className="text-xs">用户协议</Label>
+              <Input
+                id="userAgreementUrl"
+                type="url"
+                placeholder="https://..."
+                value={form.userAgreementUrl}
+                onChange={e => updateForm({ userAgreementUrl: e.target.value })}
+                disabled={uploading}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* 附件图片 */}
+        <Card className="border-0 shadow-sm">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <ImagePlus className="h-4 w-4 text-blue-500" />
+              附件图片
+            </CardTitle>
+            <CardDescription>上传游戏详情、版号信息等截图，自动生成分享链接写入文案（可选）</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div
+              className={`relative border-2 border-dashed rounded-xl p-5 text-center transition-all cursor-pointer group ${
+                attachments.length > 0
+                  ? 'border-blue-200 bg-blue-50/20 dark:bg-blue-950/10'
+                  : 'border-muted-foreground/20 hover:border-blue-300 hover:bg-muted/30'
+              }`}
+              onClick={() => !uploading && attachmentInputRef.current?.click()}
+            >
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                className="hidden"
+                accept="image/jpeg,image/png,image/gif,image/webp,.jpg,.jpeg,.png,.gif,.webp"
+                multiple
+                onChange={e => {
+                  if (e.target.files?.length) handleAddAttachments(e.target.files);
+                  e.target.value = '';
+                }}
+                disabled={uploading}
+              />
+              <ImagePlus className="h-7 w-7 mx-auto text-muted-foreground group-hover:text-blue-500 transition-colors mb-2" />
+              <p className="text-sm font-medium">点击添加图片附件</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                支持 JPG / PNG / GIF / WebP，单张最大 20MB，最多 {MAX_ATTACHMENTS} 张
+              </p>
+            </div>
+
+            {attachments.length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {attachments.map(att => (
+                  <div key={att.id} className="relative group rounded-lg border overflow-hidden bg-muted/30">
+                    <img
+                      src={att.preview}
+                      alt={att.file.name}
+                      className="w-full h-24 object-cover"
+                    />
+                    <div className="px-2 py-1.5">
+                      <p className="text-[10px] font-medium truncate">{att.file.name}</p>
+                      <p className="text-[10px] text-muted-foreground">{formatFileSize(att.file.size)}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); removeAttachment(att.id); }}
+                      className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      disabled={uploading}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* 评测包上传 */}
         <Card className="border-0 shadow-sm">
           <CardHeader className="pb-3">
@@ -507,7 +738,7 @@ export default function DeliverPage() {
               <Textarea
                 readOnly
                 value={result.message}
-                className="min-h-[180px] font-mono text-sm leading-relaxed resize-none bg-muted/30"
+                className="min-h-[220px] font-mono text-sm leading-relaxed resize-none bg-muted/30"
                 onClick={e => (e.target as HTMLTextAreaElement).select()}
               />
               <div className="flex flex-col sm:flex-row gap-2">
