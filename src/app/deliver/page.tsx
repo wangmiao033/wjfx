@@ -7,7 +7,7 @@ import Link from 'next/link';
 import {
   Package, Upload, Copy, Check, Loader2, Send, User, LogOut,
   Share2, Lock, Eye, EyeOff, Wand2, FileUp, ArrowLeft, ClipboardCheck,
-  FileText, ImagePlus, X, KeyRound, Plus,
+  FileText, ImagePlus, X, KeyRound, Plus, History, Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -31,6 +31,9 @@ import { buildDirectDownloadUrl } from '@/lib/share-links';
 
 const PRODUCT_TYPES = ['挂机', '卡牌', 'SLG', 'MMO', 'RPG', '休闲', '塔防', '模拟经营'] as const;
 const STORAGE_KEY = 'deliver-form-v3';
+const RESULT_STORAGE_KEY = 'deliver-last-result-v1';
+const HISTORY_STORAGE_KEY = 'deliver-history-v1';
+const MAX_HISTORY = 20;
 const MAX_TEST_ACCOUNTS = 5;
 const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
@@ -58,6 +61,41 @@ interface AttachmentItem {
 interface UploadedAttachment {
   fileName: string;
   shareLink: string;
+}
+
+interface SavedDeliverResult {
+  shareCode: string;
+  shareLink: string;
+  message: string;
+  fileName: string;
+  productName: string;
+  savedAt: string;
+}
+
+function loadDeliverHistory(): SavedDeliverResult[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDeliverResult(entry: SavedDeliverResult) {
+  try {
+    localStorage.setItem(RESULT_STORAGE_KEY, JSON.stringify(entry));
+    const history = loadDeliverHistory().filter(h => h.shareCode !== entry.shareCode);
+    history.unshift(entry);
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
+  } catch { /* ignore */ }
+}
+
+function formatSavedTime(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 interface TestAccount {
@@ -173,7 +211,9 @@ export default function DeliverPage() {
 
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [result, setResult] = useState<{ shareCode: string; shareLink: string; message: string } | null>(null);
+  const [result, setResult] = useState<{ shareCode: string; shareLink: string; message: string; fileName?: string; productName?: string; savedAt?: string } | null>(null);
+  const [history, setHistory] = useState<SavedDeliverResult[]>([]);
+  const [restoredFromStorage, setRestoredFromStorage] = useState(false);
   const [copied, setCopied] = useState(false);
   const [autoPushed, setAutoPushed] = useState(false);
   const resultRef = useRef<HTMLDivElement>(null);
@@ -202,6 +242,24 @@ export default function DeliverPage() {
           })));
         }
       }
+
+      const savedResultRaw = localStorage.getItem(RESULT_STORAGE_KEY);
+      if (savedResultRaw) {
+        const saved = JSON.parse(savedResultRaw) as SavedDeliverResult;
+        if (saved.shareCode && saved.message) {
+          setResult({
+            shareCode: saved.shareCode,
+            shareLink: saved.shareLink,
+            message: saved.message,
+            fileName: saved.fileName,
+            productName: saved.productName,
+            savedAt: saved.savedAt,
+          });
+          setRestoredFromStorage(true);
+        }
+      }
+
+      setHistory(loadDeliverHistory());
     } catch { /* ignore */ }
   }, []);
 
@@ -406,6 +464,18 @@ export default function DeliverPage() {
       );
 
       setResult({ shareCode, shareLink: downloadLink, message });
+      setRestoredFromStorage(false);
+
+      const savedEntry: SavedDeliverResult = {
+        shareCode,
+        shareLink: downloadLink,
+        message,
+        fileName: selectedFile.name,
+        productName: form.productName,
+        savedAt: new Date().toISOString(),
+      };
+      saveDeliverResult(savedEntry);
+      setHistory(loadDeliverHistory());
 
       try {
         await pushToClipboard(message);
@@ -452,6 +522,33 @@ export default function DeliverPage() {
     } catch {
       toast({ title: '复制失败', variant: 'destructive' });
     }
+  };
+
+  const restoreHistoryItem = (item: SavedDeliverResult) => {
+    setResult({
+      shareCode: item.shareCode,
+      shareLink: item.shareLink,
+      message: item.message,
+      fileName: item.fileName,
+      productName: item.productName,
+      savedAt: item.savedAt,
+    });
+    setRestoredFromStorage(true);
+    setAutoPushed(false);
+    setTimeout(() => {
+      resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 100);
+  };
+
+  const clearDeliverHistory = () => {
+    try {
+      localStorage.removeItem(RESULT_STORAGE_KEY);
+      localStorage.removeItem(HISTORY_STORAGE_KEY);
+    } catch { /* ignore */ }
+    setHistory([]);
+    setResult(null);
+    setRestoredFromStorage(false);
+    toast({ title: '历史记录已清除' });
   };
 
   const userName = session?.user?.name || session?.user?.email || '';
@@ -912,13 +1009,28 @@ export default function DeliverPage() {
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
                 <Check className="h-4 w-4" />
-                {autoPushed ? '已上传并推送到剪贴板' : '推送文案已就绪'}
+                {autoPushed ? '已上传并推送到剪贴板' : restoredFromStorage ? '推送记录（已保存）' : '推送文案已就绪'}
               </CardTitle>
               <CardDescription>
                 {autoPushed
                   ? '文案已在剪贴板，切换到微信粘贴发送即可'
-                  : '复制下方文案，直接粘贴到微信群发送给客户'}
+                  : restoredFromStorage
+                    ? '刷新页面后已自动恢复，可随时重新复制'
+                    : '复制下方文案，直接粘贴到微信群发送给客户'}
               </CardDescription>
+              {(result.fileName || result.savedAt) && (
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  {result.productName && (
+                    <Badge variant="secondary" className="text-[10px]">{result.productName}</Badge>
+                  )}
+                  {result.fileName && (
+                    <Badge variant="outline" className="text-[10px] font-normal">{result.fileName}</Badge>
+                  )}
+                  {result.savedAt && (
+                    <span className="text-[10px] text-muted-foreground">{formatSavedTime(result.savedAt)}</span>
+                  )}
+                </div>
+              )}
             </CardHeader>
             <CardContent className="space-y-4">
               {autoPushed && (
@@ -951,6 +1063,50 @@ export default function DeliverPage() {
                 <span className="text-xs text-muted-foreground truncate flex-1 font-mono">{result.shareLink}</span>
                 <Badge variant="secondary" className="text-[10px] flex-shrink-0">已上传</Badge>
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* 历史推送记录 */}
+        {history.length > 0 && (
+          <Card className="border-0 shadow-sm">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <History className="h-4 w-4 text-muted-foreground" />
+                    历史推送记录
+                  </CardTitle>
+                  <CardDescription className="mt-1">保存在本浏览器，刷新不丢失（最近 {MAX_HISTORY} 条）</CardDescription>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs text-muted-foreground hover:text-destructive"
+                  onClick={clearDeliverHistory}
+                >
+                  <Trash2 className="h-3.5 w-3.5 mr-1" />清空
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {history.map(item => (
+                <button
+                  key={`${item.shareCode}-${item.savedAt}`}
+                  type="button"
+                  onClick={() => restoreHistoryItem(item)}
+                  className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors hover:bg-muted/50 ${
+                    result?.shareCode === item.shareCode ? 'border-emerald-300 bg-emerald-50/50 dark:bg-emerald-950/20' : ''
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium truncate">{item.productName || '未命名产品'}</span>
+                    <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatSavedTime(item.savedAt)}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate mt-0.5">{item.fileName}</p>
+                </button>
+              ))}
             </CardContent>
           </Card>
         )}
